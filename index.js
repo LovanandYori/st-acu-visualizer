@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.3'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.4'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -172,7 +172,11 @@
     };
 
     let hideOptionsUntilUpdate = false;
-    let hiddenOptionsAnchor = null;
+    // 按楼层号（mesid）记锚点而不是元素本身：TT 虚拟化会把滚出又滚回的楼重建成新元素
+    let hiddenOptionsAnchorMesid = null;
+    // 最近一次渲染「想要」显示的嵌入块；虚拟化下目标楼被重建后据此补挂（见 reattachEmbedsAfterRemount）
+    let embedWanted = { dashboard: false, options: false };
+    let lastEmbedReattachTarget = null;
     let lastOptionDataCheck = '';
 
     const UpdateController = {
@@ -2935,7 +2939,7 @@ ${allTableNames.map(tName => {
                 });
 
                 const $opts = $target.find('.acu-embedded-options-container');
-                if ($opts.length) { $opts.before($container); } else { $target.append($container); }
+                if ($opts.length) { $opts.before($container); } else { appendAboveWrapper($target, $container); }
             }
             // 新建/原地更新后都要对齐正文列，否则容器保持 width:100% 会比 wrapper 宽
             alignWrapperToMessageColumn();
@@ -3037,7 +3041,7 @@ ${allTableNames.map(tName => {
                     }
                 });
 
-                $target.append($container);
+                appendAboveWrapper($target, $container);
             }
             // 新建/原地更新后都要对齐正文列，否则容器保持 width:100% 会比 wrapper 宽
             alignWrapperToMessageColumn();
@@ -3050,6 +3054,15 @@ ${allTableNames.map(tName => {
     // chat[i].extra._acu_original_content（随聊天持久化，上游 9.2.4 与 rebuild 9.1.1 同式）。
     // 以嵌入目标楼（DOM 最新 AI 楼）的 mesid 为准查该楼数据：ST 中 mesid=当前聊天数组下标，
     // 与 getContext().chat 同源；楼不对/原文与现文相同/标记错帧则不显。
+    const getHostChat = () => {
+        try {
+            const w = window.parent || window;
+            const ST = w.SillyTavern || window.SillyTavern;
+            const ctx = ST && typeof ST.getContext === 'function' ? ST.getContext() : null;
+            return ctx && Array.isArray(ctx.chat) ? ctx.chat : null;
+        } catch (_) { return null; }
+    };
+
     const getReplacedInfoForMesid = (mesid, chat) => {
         if (!Array.isArray(chat) || !chat.length) return null;
         const id = Number(mesid);
@@ -3065,24 +3078,12 @@ ${allTableNames.map(tName => {
         return { original: orig, at: Number(extra._acu_last_optimized_at) || 0 };
     };
 
-    // 与 getEmbeddedTargetBlock 同过滤的可见 AI 楼枚举（该函数保持原样给仪表盘/选项用）
+    // 与 getEmbeddedTargetBlock 同过滤的可见 AI 楼枚举（虚拟化下只含当前挂载的楼，滚回来的楼由 handleChatMutation 补挂）
     const collectAiMessageFloors = () => {
         const { $ } = getCore();
-        const out = [];
-        const $all = $('#chat > .mes');
-        if (!$all.length) return out;
-        $all.each(function () {
-            const el = this;
-            if (el.getAttribute('is_user') === 'true' || el.getAttribute('is_system') === 'true') return;
-            if (el.classList.contains('sys_mes')) return;
-            const $name = el.querySelector('.name_text');
-            if ($name && $name.textContent.trim() === 'System') return;
-            if (el.offsetParent === null && el.getClientRects().length === 0) return;
-            const $el = $(el);
-            const $block = $el.find('.mes_block');
-            out.push({ $block: $block.length ? $block : $el, mesid: $el.attr('mesid') });
-        });
-        return out;
+        return $('#chat > .mes').get()
+            .filter(isEmbeddableAiMes)
+            .map((el) => ({ $block: blockOfMes($(el)), mesid: el.getAttribute('mesid') }));
     };
 
     // 盒子落位：top=块顶 prepend；bottom=块底选项框之前（无选项框则 append）
@@ -3090,10 +3091,17 @@ ${allTableNames.map(tName => {
         if (position === 'bottom') {
             const $opts = $block.find('.acu-embedded-options-container');
             if ($opts.length) { $opts.before($box); return; }
-            $block.append($box);
+            appendAboveWrapper($block, $box);
             return;
         }
         $block.prepend($box);
+    };
+
+    // 同楼里主面板（滚动/消息模式）固定排最后：handleChatMutation 会把不在末位的 wrapper
+    // 重新 append 到末尾，嵌入块若直接 append 到它后面，下一次聊天区变动就会看到面板跳一下。
+    const appendAboveWrapper = ($block, $el) => {
+        const $wrapper = $block.children('.acu-wrapper');
+        if ($wrapper.length) $wrapper.first().before($el); else $block.append($el);
     };
 
     const injectReplacedContentBox = () => {
@@ -3104,15 +3112,15 @@ ${allTableNames.map(tName => {
         if (config.repBoxEnabled === false) { $(SEL).remove(); return; }
         const scope = config.repBoxScope === 'all' ? 'all' : 'latest';
         const position = config.repBoxPosition === 'bottom' ? 'bottom' : 'top';
-        let chat = null;
-        try {
-            const w = window.parent || window;
-            const ST = w.SillyTavern || window.SillyTavern;
-            const ctx = ST && typeof ST.getContext === 'function' ? ST.getContext() : null;
-            chat = ctx && Array.isArray(ctx.chat) ? ctx.chat : null;
-        } catch (_) {}
-        const floors = collectAiMessageFloors();
-        const wanted = scope === 'all' ? floors : floors.slice(-1);
+        const chat = getHostChat();
+        // latest 与仪表盘/选项共用同一个「最新 AI 楼」认定（虚拟化下按 chat[] 认，见 getEmbeddedTargetBlock）
+        let wanted;
+        if (scope === 'all') {
+            wanted = collectAiMessageFloors();
+        } else {
+            const $latest = getEmbeddedTargetBlock();
+            wanted = $latest ? [{ $block: $latest, mesid: mesidOfBlock($latest) }] : [];
+        }
         // 主题与变量从主 wrapper 现取（MESSAGE_UPDATED 轻量重渲染不经 renderInterface，无参可传）
         const $wrapper = $('.acu-wrapper').first();
         let themeClass = '';
@@ -3414,16 +3422,16 @@ ${allTableNames.map(tName => {
                 if (n > rowLimit) rs += sampleRow(n - 1) + ';'; // 末行补最新写入
                 return h + '@' + rs;
             }).join('~');
-            if (hideOptionsUntilUpdate && hiddenOptionsAnchor) {
-                const $currentAnchor = getEmbeddedTargetBlock();
-                if ($currentAnchor && $currentAnchor.length && $currentAnchor.get(0) !== hiddenOptionsAnchor) {
+            if (hideOptionsUntilUpdate && hiddenOptionsAnchorMesid != null) {
+                const currentMesid = mesidOfBlock(getEmbeddedTargetBlock());
+                if (currentMesid != null && currentMesid !== hiddenOptionsAnchorMesid) {
                     hideOptionsUntilUpdate = false;
-                    hiddenOptionsAnchor = null;
+                    hiddenOptionsAnchorMesid = null;
                 }
             }
             if (optionStr !== lastOptionDataCheck) {
                 hideOptionsUntilUpdate = false;
-                hiddenOptionsAnchor = null;
+                hiddenOptionsAnchorMesid = null;
                 lastOptionDataCheck = optionStr;
             }
 
@@ -3506,6 +3514,7 @@ ${allTableNames.map(tName => {
             insertHtmlToPage(html); 
 
             // 注入段各自独立兜错：若抛异常不能让 bindEvents 不达（否则新 DOM 零事件处理器，面板整体点不动）
+            embedWanted = { dashboard: !!(showDash && config.dashboardPosition === 'embedded'), options: !!optionBtnContent };
             if (showDash && config.dashboardPosition === 'embedded') {
                  try {
                      const dashHtml = renderDashboard(tables, true);
@@ -3840,30 +3849,53 @@ ${allTableNames.map(tName => {
     // 都靠 .filter() 全表扫 + 每条消息调 .css('display')（per-message getComputedStyle）
     // 和 .find('.name_text')（子树查询）。这里提一份共享的，倒序找 + offsetParent
     // 判隐藏，不再做那两个 per-node 调用。返回 .mes_block（没有则退回 .mes）。
-    const getEmbeddedTargetBlock = () => {
-        const { $ } = getCore();
-        const $all = $('#chat > .mes');
-        if (!$all.length) return null;
-        const nodes = $all.get();
-        for (let i = nodes.length - 1; i >= 0; i--) {
-            const el = nodes[i];
-            if (el.getAttribute('is_user') === 'true' || el.getAttribute('is_system') === 'true') continue;
-            if (el.classList.contains('sys_mes')) continue;
-            const $name = el.querySelector('.name_text');
-            if ($name && $name.textContent.trim() === 'System') continue;
-            if (el.offsetParent === null && el.getClientRects().length === 0) continue;
-            const $el = $(el);
-            const $block = $el.find('.mes_block');
-            return $block.length ? $block : $el;
+    const isEmbeddableAiMes = (el) => {
+        if (el.getAttribute('is_user') === 'true' || el.getAttribute('is_system') === 'true') return false;
+        if (el.classList.contains('sys_mes')) return false;
+        const nameEl = el.querySelector('.name_text');
+        if (nameEl && nameEl.textContent.trim() === 'System') return false;
+        return !(el.offsetParent === null && el.getClientRects().length === 0);
+    };
+    const blockOfMes = ($mes) => {
+        const $block = $mes.find('.mes_block');
+        return $block.length ? $block : $mes;
+    };
+    // TT 虚拟化下 DOM 只挂着视口附近几楼 + 末楼：「DOM 里最后一条 AI 楼」可能只是视口里某个
+    // 历史楼（例如末楼是用户楼、而你正往上翻）。所以按 chat[] 认定真正的最新 AI 楼，
+    // 它没挂载就返回 null（不挂到错楼上），等它重新挂载时由 handleChatMutation 补挂。
+    const getLatestAiMesidFromChat = () => {
+        const chat = getHostChat();
+        if (!chat) return undefined;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const m = chat[i];
+            if (m && !m.is_user && !m.is_system && m.name !== 'System') return i;
         }
         return null;
     };
+    const getEmbeddedTargetBlock = () => {
+        const { $ } = getCore();
+        if (detectTTBounded()) {
+            const mesid = getLatestAiMesidFromChat();
+            if (mesid === null) return null;
+            if (mesid !== undefined) {
+                const $mes = $(`#chat > .mes[mesid="${mesid}"]`);
+                return $mes.length && isEmbeddableAiMes($mes[0]) ? blockOfMes($mes) : null;
+            }
+            // 拿不到 chat[] 时退回下面的 DOM 倒序查找
+        }
+        const nodes = $('#chat > .mes').get();
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            if (isEmbeddableAiMes(nodes[i])) return blockOfMes($(nodes[i]));
+        }
+        return null;
+    };
+    const mesidOfBlock = ($block) => ($block && $block.length ? $block.closest('.mes').attr('mesid') : undefined);
 
     // 发送后隐藏选项只针对当前可见 AI 楼；新楼出现即解除，避免选项表未变化时永久消失。
     const hideOptionsUntilAnchorChanges = () => {
-        const $anchor = getEmbeddedTargetBlock();
-        if (!$anchor || !$anchor.length) return;
-        hiddenOptionsAnchor = $anchor.get(0);
+        const anchorMesid = mesidOfBlock(getEmbeddedTargetBlock());
+        if (anchorMesid == null) return;
+        hiddenOptionsAnchorMesid = anchorMesid;
         hideOptionsUntilUpdate = true;
         $('.acu-embedded-options-container').hide();
     };
@@ -4015,12 +4047,49 @@ ${allTableNames.map(tName => {
         for (const p of plans) applyPanelAlignment(p);
     };
 
+    // TT 虚拟化下 #chat 的直属子变动绝大多数是宿主在挪 spacer（每次投影提交都会重插），
+    // 只有 .mes 增删才可能影响面板挂点、对齐基准和嵌入块。
+    const mutationTouchesMessages = (records) => records.some((r) =>
+        [...r.addedNodes, ...r.removedNodes].some((n) => n.nodeType === 1 && n.classList.contains('mes')));
+    const mutationAddsMessages = (records) => records.some((r) =>
+        [...r.addedNodes].some((n) => n.nodeType === 1 && n.classList.contains('mes')));
+
+    // 虚拟化会把滚出视口的楼拆掉、滚回来时重建成新元素，且宿主此时不发任何 ST 事件，
+    // 挂在旧元素里的嵌入块随之消失。这里在有楼被（重新）挂载后补挂：
+    // - 被替换正文框：handler 在 upsertRepBox 内联绑定，直接重跑注入即可；
+    // - 仪表盘/选项：点击事件由 bindEvents 直接绑在元素上，复制一份挂回去会是「点不动」的死块，
+    //   所以走一次常规 renderInterface(false)；同一目标楼只补一次，防注入失败时反复重渲染。
+    // 返回是否做了整体重渲染（是则主面板已被替换，调用方手里的旧 wrapper 引用作废）。
+    const reattachEmbedsAfterRemount = () => {
+        try { if (getConfig().repBoxEnabled !== false) injectReplacedContentBox(); } catch (_) {}
+        const $target = getEmbeddedTargetBlock();
+        if (!$target || !$target.length || $target[0] === lastEmbedReattachTarget) return false;
+        const missing = (wanted, sel) => wanted && !$target.children(sel).length;
+        if (missing(embedWanted.dashboard, '.acu-embedded-dashboard-container')
+            || missing(embedWanted.options && !hideOptionsUntilUpdate, '.acu-embedded-options-container')) {
+            try { renderInterface(false); } catch (_) {}
+            lastEmbedReattachTarget = $target[0];
+            return true;
+        }
+        return false;
+    };
+
     // H-05 单例 handleChatMutation：提升至模块级，rAF 合并复用
-    const handleChatMutation = () => {
+    let chatMutationTouchedMes = false;
+    let chatMutationAddedMes = false;
+    const handleChatMutation = (records) => {
+        // 无 records（非 MutationObserver 调用）按「楼层有变」处理，保持旧语义
+        const list = Array.isArray(records) ? records : null;
+        if (!list || mutationTouchesMessages(list)) chatMutationTouchedMes = true;
+        if (!list || mutationAddsMessages(list)) chatMutationAddedMes = true;
         if (chatObsRafPending) return;
         chatObsRafPending = true;
         requestAnimationFrame(() => {
             chatObsRafPending = false;
+            const touchedMes = chatMutationTouchedMes;
+            const addedMes = chatMutationAddedMes;
+            chatMutationTouchedMes = false;
+            chatMutationAddedMes = false;
             const currentConfig = getConfig();
             const $chatNode = $('#chat');
             const $wrapper = $('.acu-wrapper');
@@ -4028,6 +4097,10 @@ ${allTableNames.map(tName => {
             if (!$wrapper.length) { try { renderInterface(true); } catch (_) {} return; }
             // TT 适配（仅虚拟化开启时生效）：fixed=输入框上方常驻；scroll 落入下方 message/bottom 常规分支
             const isTTBoundedM = detectTTBounded();
+            // 虚拟化下 spacer-only 的变动直接跳过：每次投影提交都会重插 spacer，没必要每次都强制重排测量一遍
+            if (isTTBoundedM && !touchedMes) return;
+            // 重渲染已按当前配置重新挂好主面板，继续往下会拿已脱离文档的旧 wrapper 再插一份
+            if (isTTBoundedM && addedMes && reattachEmbedsAfterRemount()) return;
             if (isTTBoundedM && (currentConfig.ttPanelMode || 'fixed') === 'fixed') {
                 // 固定模式：优先保持 wrapper 在 #form_sheld/#send_form 前，彻底脱离 #chat 虚拟化；找不到表单时回退
                 const $formAnchorChk = $('#form_sheld, #send_form').first();
@@ -4044,7 +4117,7 @@ ${allTableNames.map(tName => {
                 return;
             }
             if (currentConfig.frontendPosition === 'message') {
-                const $lastMes = $chatNode.find('.mes').last();
+                const $lastMes = $chatNode.children('.mes').last();
                 if ($lastMes.length) {
                     const $targetBlock = $lastMes.find('.mes_block').length ? $lastMes.find('.mes_block') : $lastMes;
                     if (!$targetBlock.find('.acu-wrapper').length) {
@@ -4056,7 +4129,7 @@ ${allTableNames.map(tName => {
                 }
             } else if (isTTBoundedM) {
                 // 滚动 + bottom（虚拟化开启）：挂末楼 mes_block 内，避免 #chat 直属触发 Bounded fault（与 JS-Slash-Runner 的 message-runtime 隔离）
-                const $lastMesSc = $chatNode.find('.mes').last();
+                const $lastMesSc = $chatNode.children('.mes').last();
                 if ($lastMesSc.length) {
                     const $tbSc = $lastMesSc.find('.mes_block').length ? $lastMesSc.find('.mes_block') : $lastMesSc;
                     if (!$tbSc.find('.acu-wrapper').length) $tbSc.append($wrapper);
@@ -4427,7 +4500,9 @@ const checkRowChanged = (realIdx, row) => {
         $('.acu-nav-btn').removeClass('active');
         saveActiveTabState(null);
 
-        if ($chat.length) {
+        // TT 虚拟化下 #chat 是宿主虚拟列表的唯一滚动根：它自己会在高度变化后做锚点校正，
+        // 10ms 后再写回旧值会被当成一次用户滚动，打断校正（可见跳动）并暂停卡片内小程序。
+        if ($chat.length && !detectTTBounded()) {
             setTimeout(() => {
                  $chat.scrollTop(currentScroll);
             }, 10);

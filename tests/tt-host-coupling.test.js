@@ -14,9 +14,8 @@
 //   T-3 bounded 模式下**绝不能**把面板挂成 `#chat` 的直属子节点——
 //       那是宿主唯一的真实 fault 入口：`Bounded ChatSurface contains an unknown
 //       direct child`（chat-dom-adapter.js:323-332）。
-//   T-4 closePanel 会把关闭前记下的 scrollTop 写回 `#chat`（宿主的唯一 scroll root）。
-//       本轮**不改**（它有正当用途：面板折叠后布局位移需要回正），但把现状钉住，
-//       并记录待实测的风险：写陈旧值可能被宿主判为非程序化滚动而挂起投影。
+//   （原 T-4 closePanel 的 scrollTop 写回：V17.7.4 起虚拟化下不再写回，
+//     该契约改由 tt-virtualization 的 V-7 真跑守护，这里不重复。）
 //   T-5 不得复用宿主的选择器类名（`mes_text` / `mesIDDisplay` 等）：
 //       宿主用 `querySelector` 取**文档序第一个**，在其之前插入同名节点会触发
 //       `DOM identity changed during content reconciliation`。
@@ -57,10 +56,12 @@ section('[T-1] 消息选择器与宿主同边界（#chat 的直属子 .mes）');
 {
   // 宿主用 :scope > .mes（chat-dom-adapter.js:7）
   const descendant = src.match(/\$\('#chat \.mes'\)/g) || [];
-  const findStyle = src.match(/\$chat\.find\('\.mes'\)/g) || [];
+  // 任何以 $chat 开头的变量名（$chat / $chatNode …）都算：V17.7.3 的旧正则只认 `$chat.`，
+  // 漏掉了归位逻辑里两处 `$chatNode.find('.mes')`。
+  const findStyle = src.match(/\$chat\w*\.find\('\.mes'\)/g) || [];
   eq(descendant.length, 0, "不再有 $('#chat .mes')（后代选择器）",
     descendant.length + ' 处');
-  eq(findStyle.length, 0, "不再有 $chat.find('.mes')（后代选择器）",
+  eq(findStyle.length, 0, "不再有 $chat*.find('.mes')（后代选择器）",
     findStyle.length + ' 处');
   const direct = src.match(/\$\('#chat > \.mes'\)/g) || [];
   const children = src.match(/\$chat\.children\('\.mes'\)/g) || [];
@@ -119,25 +120,6 @@ section('[T-3] bounded 模式下不把面板挂成 #chat 的直属子节点');
     firstDirectAppend === -1 ? '(bounded 段内无直挂)' : '');
   // 兜底注释留痕：说明这条约束的由来
   ok(/unknown direct child/.test(src), '代码里留有该 fault 的由来说明（防后人改成直挂）');
-}
-
-// ── T-4 closePanel 的 scrollTop 写回（钉住现状 + 记录风险）──
-section('[T-4] closePanel 的 scrollTop 写回：现状钉住，风险记录在案');
-{
-  ok(/const currentScroll = \$chat\.length \? \$chat\.scrollTop\(\) : 0;/.test(src),
-    '关闭前记下 #chat 的 scrollTop');
-  ok(/setTimeout\(\(\) => \{\s*\$chat\.scrollTop\(currentScroll\);\s*\}, 10\);/.test(src),
-    '10ms 后把该值写回（现状：本轮刻意不改）');
-  // 它确实写在宿主的唯一 scroll root 上——这是风险所在，必须显式记录
-  ok(/#chat/.test(src.slice(src.indexOf('const closePanel'), src.indexOf('const closePanel') + 4000)),
-    '写回目标是 #chat（= 宿主 chat-scroll-adapter 的唯一 scroll root）');
-  // 「本轮不改」必须留下可查的记录，否则下一个读代码的人无从知道这是个已知风险。
-  // 断言的是「变更日志里确实写了这笔未实测的风险」——可证伪，不是恒真。
-  const fs2 = require('fs');
-  const path2 = require('path');
-  const changelog = fs2.readFileSync(path2.join(__dirname, '..', 'CHANGELOG.md'), 'utf8');
-  ok(changelog.includes('scrollTop') && /未实测|待实测|未验证/.test(changelog),
-    '该风险已作为「未实测」记录在 CHANGELOG 里（断言的是记录在不在，不是恒真）');
 }
 
 // ── T-5 不得复用宿主选择器类名 ──

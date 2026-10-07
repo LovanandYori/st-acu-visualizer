@@ -36,7 +36,8 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 | 套件 | 守什么 | 关键手法 |
 |---|---|---|
 | `extract-self` | **抽取器自身**：花括号配平（正则字面量 / 模板串插值 / 注释里的括号）、未闭合块注释不死循环、锚点不唯一必须报错、`sliceDecl` 不吞下一条声明 | 抽取器是全套的地基：配平错一个括号就会抽错代码，而断言仍全绿 |
-| `tt-host-coupling` | **宿主契约**（TT 2.3.0）：消息选择器必须是 `#chat` 直属子 `.mes`（同 `directMessages()` 的 `:scope > .mes`）；`detectTTBounded` 三条路径；bounded 下不得直挂 `#chat`（那是宿主唯一真实 fault 入口 `unknown direct child`）；不复用宿主选择器类名（`mes_text` / `mesIDDisplay`）；`closePanel` 的 scrollTop 写回现状 | 假 DOM 证明 `:scope > .mes` 与后代选择器会分叉；`detectTTBounded` 真跑三条路径（含抛错 fail-safe） |
+| `tt-host-coupling` | **宿主契约**（TT 2.3.0）：消息选择器必须是 `#chat` 直属子 `.mes`（同 `directMessages()` 的 `:scope > .mes`）；`detectTTBounded` 三条路径；bounded 下不得直挂 `#chat`（那是宿主唯一真实 fault 入口 `unknown direct child`）；不复用宿主选择器类名（`mes_text` / `mesIDDisplay`） | 假 DOM 证明 `:scope > .mes` 与后代选择器会分叉；`detectTTBounded` 真跑三条路径（含抛错 fail-safe） |
+| `tt-virtualization` | **虚拟化下嵌入块的生命周期**（不 fault 之后面板还对不对）：只有 `.mes` 增删算楼层变动、spacer 重插不算；「最新 AI 楼」按 `chat[]` 认定、未挂载返回 null；隐藏选项锚点按 mesid 比较；楼层重建后补挂（缺块才重渲染、同目标只补一次、隐藏的选项不补）；补挂重渲染后不再拿旧 wrapper 归位；嵌入块插在同楼主面板之上；`closePanel` 虚拟化下不写回 scrollTop | 自带极简假 DOM + 假 jQuery，真跑 `handleChatMutation` 等真实源码；V-2 含「DOM 倒序法会挑中历史楼」对照组 |
 | `write-identity` | 身份闸门的**锚点/基准分工**（锚点=用户所见取缓存、基准=DB 现状取活引用）；row_id/表头不符→拒；空串表头参与比对；catch 必须 fail-closed；脏数据 fail-closed；活引用不可用时回退 | 活引用与缓存克隆是**两个不同对象**；含一个「锚点也读活引用则闸门恒过」的对照组，证明测试有区分力 |
 | `row-edit-two-phase` | 整行编辑先校验后落笔：空表头列、与 DB 提交选项同名的列一律拒提交并说明；提交键用原始表头；身份闸门基准取活引用 | 假 `dialog` 提供 `find('textarea').each`；live/cache 分离 |
 | `cell-edit-guard` | 值未变则不写库/不动 DOM；`null≡''`、`0≢''`；读不到旧值时 fail-open 不吞写入；写失败回滚 | Proxy 间谍区分「读属性」与「真正调用」 |
@@ -50,7 +51,7 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 
 ## 注入矩阵（`sabotage-matrix.py`）
 
-**33 处真实缺陷注入，33 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
+**43 处真实缺陷注入，43 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
 改动测试或生产代码后请重跑，退出码非 0 表示「有注入无人发现」**或**「有注入锚点已失效」。
 
 <details>
@@ -110,6 +111,27 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 </details>
 
 <details>
+<summary>展开（第六批：V17.7.4 TT 虚拟化下的嵌入块生命周期）</summary>
+
+```
+✓ 最新 AI 楼退回 DOM 倒序法（往上翻时挂到视口里的历史楼）       → tt-virtualization
+✓ spacer-only 变动不再跳过（每次投影提交多一次强制重排）       → tt-virtualization
+✓ 楼层判定把 spacer 也算成楼层变动                             → tt-virtualization
+✓ 补挂重渲染后仍拿旧 wrapper 归位（插回一份脱离的旧面板）       → tt-virtualization
+✓ 补挂去掉同目标只补一次的护栏（注入失败时反复重渲染）         → tt-virtualization
+✓ 补挂无视「发送后隐藏」把选项又挂回来                         → tt-virtualization
+✓ 隐藏选项锚点不再比楼层号（挂载即解除隐藏）                   → tt-virtualization
+✓ 嵌入块退回直接 append 到主面板之后（下一次变动面板跳动）     → tt-virtualization
+✓ closePanel 虚拟化下仍写回 scrollTop                          → tt-virtualization
+✓ 归位逻辑退回 $chatNode.find 语义（后代选择器）               → tt-host-coupling
+```
+
+最后一条是 V17.7.3 的漏网：当时 T-1 的正则只认 `$chat.find`，归位逻辑里两处
+`$chatNode.find('.mes')` 没被拦下，本轮改为匹配任何 `$chat*` 变量名。
+
+</details>
+
+<details>
 <summary>展开（第三批：V17.7.2 因 ST 库 1.0.0 引入的回归）</summary>
 
 ```
@@ -140,6 +162,10 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 - **DB 隔离运行时**（`isolatedRuntime_ACU`）下 `exportTableAsJson` 恒返回全局视图，
   若该模式在 TT 生产启用，闸门复验的对象与 DB 写库解析下标的对象可能不是同一个。
   未确认该模式是否启用，暂记为待查项。
+- **虚拟化的真实宿主行为**（TanStack 测量、spacer 重插时机、楼层重建）没有进 vm：
+  `tt-virtualization` 用的是按宿主源码（TT 2.3.0 `chat-dom-adapter.js` / `bounded-chat-surface.js`）
+  归纳出的 MutationRecord 形状，证明的是「前端对这些输入的反应」，不是「宿主一定这样发」。
+  真机行为仍需在 TT 上开虚拟化实测。
 - **「绝不写活引用」目前只有注释约束**，没有可执行守卫。
   `data-plumbing` 的 P-4 已把「`processJsonData` 不改入参」与「rows 与活引用共享行数组」
   钉成断言，将来有人往 `verifyTables` 上写会先看到它失败——但那需要有人先跑测试。
