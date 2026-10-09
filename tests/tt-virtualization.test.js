@@ -6,8 +6,8 @@
 //
 //   V-1 只有 .mes 增删才算楼层变动；spacer 重插（每次投影提交都有）不算
 //   V-2 「最新 AI 楼」按 chat[] 认定；它没挂载时返回 null，不挂到视口里的历史楼上
-//   V-3 发送后隐藏选项的锚点按楼层号比较：同一楼被重建（新元素同 mesid）不算换楼
-//   V-4 楼层（重新）挂载后补挂嵌入块：缺块才重渲染、同一目标元素只补一次、被隐藏的选项不补
+//   （V-3 原为「隐藏选项锚点按楼层号比较」；V17.7.5 起选项改按归属楼显隐，契约归 options-ownership 套件）
+//   V-4 楼层（重新）挂载后补挂嵌入块：缺块才重渲染、同一目标元素只补一次、选项按归属规则判断要不要补
 //   V-5 handleChatMutation：虚拟化下 spacer-only 变动零开销；补挂做了重渲染后不再拿旧 wrapper 归位；
 //       非虚拟化（ST）保持旧语义
 //   V-6 嵌入块插在同楼主面板之上（主面板固定排末位，否则下一次变动面板会跳）
@@ -15,7 +15,7 @@
 'use strict';
 
 const { section, ok, eq, report } = require('./helpers/harness');
-const { readSource, sliceConstFn, sliceDecl, sliceRange, buildScope } = require('./helpers/extract');
+const { readSource, sliceConstFn, sliceDecl, buildScope } = require('./helpers/extract');
 const vm = require('vm');
 
 const src = readSource(process.argv[2]);
@@ -114,8 +114,6 @@ const decl = {
   reattach: sliceConstFn(src, 'const reattachEmbedsAfterRemount = () => {', 'reattachEmbedsAfterRemount'),
   handle: sliceConstFn(src, 'const handleChatMutation = (records) => {', 'handleChatMutation'),
   close: sliceConstFn(src, 'const closePanel = () => {', 'closePanel'),
-  hideCheck: sliceRange(src, 'if (hideOptionsUntilUpdate && hiddenOptionsAnchorMesid != null) {',
-    'if (optionStr !== lastOptionDataCheck)', 'hideCheck'),
 };
 
 const rec = (added = [], removed = []) => ({ addedNodes: added, removedNodes: removed });
@@ -163,33 +161,21 @@ section('[V-2] 最新 AI 楼按 chat[] 认定；没挂载就返回 null');
   eq(noChat.mesidOf(noChat.target()), '2', '拿不到 chat[] → 退回 DOM 倒序法（不因此什么都不显示）');
 }
 
-section('[V-3] 隐藏选项的锚点按楼层号比较');
-{
-  const check = (anchorMesid, currentMesid) => run(
-    ['let hideOptionsUntilUpdate = true;', `let hiddenOptionsAnchorMesid = ${JSON.stringify(anchorMesid)};`,
-      fwd('getEmbeddedTargetBlock'), fwd('mesidOfBlock'), decl.hideCheck],
-    'hideOptionsUntilUpdate',
-    { getEmbeddedTargetBlock: () => ({ mesid: currentMesid }), mesidOfBlock: (b) => b.mesid },
-  );
-  ok(check('4', '4') === true, '同一楼被虚拟化重建（新元素、同 mesid）→ 仍保持隐藏');
-  ok(check('4', '6') === false, '最新 AI 楼换成新楼 → 解除隐藏');
-  ok(check('4', undefined) === true, '最新 AI 楼当前未挂载 → 保持隐藏，不误解除');
-}
-
 section('[V-4] 楼层重新挂载后补挂嵌入块');
 {
-  const setup = ({ wanted, hidden = false, repBoxEnabled = true }) => {
+  const setup = ({ wanted, showOptions = false, optionData = 'h@1:a|;', repBoxEnabled = true }) => {
     const calls = { render: 0, rep: 0 };
     const deps = {
       getConfig: () => ({ repBoxEnabled }),
       injectReplacedContentBox: () => { calls.rep++; },
       getEmbeddedTargetBlock: () => deps.$target,
       renderInterface: () => { calls.render++; },
+      shouldShowOptions: () => showOptions,
     };
     const f = run(
       [fwd('getConfig'), fwd('injectReplacedContentBox'), fwd('getEmbeddedTargetBlock'), fwd('renderInterface'),
-        `let embedWanted = ${JSON.stringify(wanted)};`, 'let lastEmbedReattachTarget = null;',
-        `let hideOptionsUntilUpdate = ${hidden};`, decl.reattach],
+        fwd('shouldShowOptions'), `let embedWanted = ${JSON.stringify(wanted)};`, 'let lastEmbedReattachTarget = null;',
+        `let lastOptionDataCheck = ${JSON.stringify(optionData)};`, decl.reattach],
       'reattachEmbedsAfterRemount', deps);
     return { f, calls, deps };
   };
@@ -199,7 +185,7 @@ section('[V-4] 楼层重新挂载后补挂嵌入块');
     return makeJq(new El())(el);
   };
 
-  const s = setup({ wanted: { dashboard: true, options: false } });
+  const s = setup({ wanted: { dashboard: true } });
   s.deps.$target = blockWith('mes_text');
   ok(s.f() === true && s.calls.render === 1, '想要仪表盘、目标楼里没有 → 重渲染一次并返回 true');
   ok(s.f() === false && s.calls.render === 1, '同一目标元素再次触发 → 不再重渲染（防注入失败时反复重渲染）');
@@ -207,15 +193,23 @@ section('[V-4] 楼层重新挂载后补挂嵌入块');
   ok(s.f() === true && s.calls.render === 2, '该楼又被重建（新元素）→ 再补一次');
   ok(s.calls.rep === 3, '每次都重跑被替换正文框注入（它自带事件绑定，无需整体重渲染）');
 
-  const present = setup({ wanted: { dashboard: true, options: true } });
+  const present = setup({ wanted: { dashboard: true }, showOptions: true });
   present.deps.$target = blockWith('acu-embedded-dashboard-container', 'acu-embedded-options-container');
   ok(present.f() === false && present.calls.render === 0, '嵌入块都在 → 不重渲染');
 
-  const hidden = setup({ wanted: { dashboard: false, options: true }, hidden: true });
+  const hidden = setup({ wanted: { dashboard: false }, showOptions: false });
   hidden.deps.$target = blockWith('mes_text');
-  ok(hidden.f() === false && hidden.calls.render === 0, '选项处于「发送后隐藏」→ 不为它补挂');
+  ok(hidden.f() === false && hidden.calls.render === 0, '选项不该显示（最新楼不是其归属楼）→ 不为它补挂');
 
-  const none = setup({ wanted: { dashboard: true, options: true }, repBoxEnabled: false });
+  const owned = setup({ wanted: { dashboard: false }, showOptions: true });
+  owned.deps.$target = blockWith('mes_text');
+  ok(owned.f() === true && owned.calls.render === 1, '选项该显示而目标楼里没有 → 重渲染补挂');
+
+  const noTable = setup({ wanted: { dashboard: false }, showOptions: true, optionData: '' });
+  noTable.deps.$target = blockWith('mes_text');
+  ok(noTable.f() === false && noTable.calls.render === 0, '根本没有选项表 → 不为它重渲染');
+
+  const none = setup({ wanted: { dashboard: true }, showOptions: true, repBoxEnabled: false });
   none.deps.$target = null;
   ok(none.f() === false && none.calls.render === 0, '目标楼未挂载 → 什么都不做');
   ok(none.calls.rep === 0, '被替换正文框关闭时不重跑其注入');

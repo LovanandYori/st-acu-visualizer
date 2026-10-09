@@ -37,7 +37,8 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 |---|---|---|
 | `extract-self` | **抽取器自身**：花括号配平（正则字面量 / 模板串插值 / 注释里的括号）、未闭合块注释不死循环、锚点不唯一必须报错、`sliceDecl` 不吞下一条声明 | 抽取器是全套的地基：配平错一个括号就会抽错代码，而断言仍全绿 |
 | `tt-host-coupling` | **宿主契约**（TT 2.3.0）：消息选择器必须是 `#chat` 直属子 `.mes`（同 `directMessages()` 的 `:scope > .mes`）；`detectTTBounded` 三条路径；bounded 下不得直挂 `#chat`（那是宿主唯一真实 fault 入口 `unknown direct child`）；不复用宿主选择器类名（`mes_text` / `mesIDDisplay`） | 假 DOM 证明 `:scope > .mes` 与后代选择器会分叉；`detectTTBounded` 真跑三条路径（含抛错 fail-safe） |
-| `tt-virtualization` | **虚拟化下嵌入块的生命周期**（不 fault 之后面板还对不对）：只有 `.mes` 增删算楼层变动、spacer 重插不算；「最新 AI 楼」按 `chat[]` 认定、未挂载返回 null；隐藏选项锚点按 mesid 比较；楼层重建后补挂（缺块才重渲染、同目标只补一次、隐藏的选项不补）；补挂重渲染后不再拿旧 wrapper 归位；嵌入块插在同楼主面板之上；`closePanel` 虚拟化下不写回 scrollTop | 自带极简假 DOM + 假 jQuery，真跑 `handleChatMutation` 等真实源码；V-2 含「DOM 倒序法会挑中历史楼」对照组 |
+| `options-ownership` | **行动选项归属**（V17.7.5 用户定的规则：当且仅当最新楼层是 AI 楼、且这一楼有自己的选项时才显示）：最新楼层身份（跳过隐藏/系统楼、用户楼为 null、含 swipe_id 与 send_date）；生成中的数据变化（DB 回退到上一楼）不认领；用户实报场景逐步回放；滑动/滑回/删楼重生成；quiet/dryRun 不算前台生成；停止生成撤销「发送时先藏」；拿不到 chat 时保持旧行为 | 真实的 `trySubscribeFloorEvents` 订阅到假事件总线，按宿主事件顺序回放；假计时器异步排队（同步执行会掩盖「已排程」标记清不掉）。O-7 是源码顺序检查（`renderInterface` 体量太大无法整体进 vm），如实标注 |
+| `tt-virtualization` | **虚拟化下嵌入块的生命周期**（不 fault 之后面板还对不对）：只有 `.mes` 增删算楼层变动、spacer 重插不算；「最新 AI 楼」按 `chat[]` 认定、未挂载返回 null；楼层重建后补挂（缺块才重渲染、同目标只补一次、选项按归属规则判断要不要补）；补挂重渲染后不再拿旧 wrapper 归位；嵌入块插在同楼主面板之上；`closePanel` 虚拟化下不写回 scrollTop | 自带极简假 DOM + 假 jQuery，真跑 `handleChatMutation` 等真实源码；V-2 含「DOM 倒序法会挑中历史楼」对照组 |
 | `write-identity` | 身份闸门的**锚点/基准分工**（锚点=用户所见取缓存、基准=DB 现状取活引用）；row_id/表头不符→拒；空串表头参与比对；catch 必须 fail-closed；脏数据 fail-closed；活引用不可用时回退 | 活引用与缓存克隆是**两个不同对象**；含一个「锚点也读活引用则闸门恒过」的对照组，证明测试有区分力 |
 | `row-edit-two-phase` | 整行编辑先校验后落笔：空表头列、与 DB 提交选项同名的列一律拒提交并说明；提交键用原始表头；身份闸门基准取活引用 | 假 `dialog` 提供 `find('textarea').each`；live/cache 分离 |
 | `cell-edit-guard` | 值未变则不写库/不动 DOM；`null≡''`、`0≢''`；读不到旧值时 fail-open 不吞写入；写失败回滚 | Proxy 间谍区分「读属性」与「真正调用」 |
@@ -51,7 +52,7 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 
 ## 注入矩阵（`sabotage-matrix.py`）
 
-**43 处真实缺陷注入，43 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
+**51 处真实缺陷注入，51 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
 改动测试或生产代码后请重跑，退出码非 0 表示「有注入无人发现」**或**「有注入锚点已失效」。
 
 <details>
@@ -119,15 +120,35 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 ✓ 楼层判定把 spacer 也算成楼层变动                             → tt-virtualization
 ✓ 补挂重渲染后仍拿旧 wrapper 归位（插回一份脱离的旧面板）       → tt-virtualization
 ✓ 补挂去掉同目标只补一次的护栏（注入失败时反复重渲染）         → tt-virtualization
-✓ 补挂无视「发送后隐藏」把选项又挂回来                         → tt-virtualization
-✓ 隐藏选项锚点不再比楼层号（挂载即解除隐藏）                   → tt-virtualization
 ✓ 嵌入块退回直接 append 到主面板之后（下一次变动面板跳动）     → tt-virtualization
 ✓ closePanel 虚拟化下仍写回 scrollTop                          → tt-virtualization
 ✓ 归位逻辑退回 $chatNode.find 语义（后代选择器）               → tt-host-coupling
 ```
 
+（第六批原有两条「发送后隐藏」相关注入，随 V17.7.5 改为按归属楼显隐而移除，改由第七批覆盖。）
 最后一条是 V17.7.3 的漏网：当时 T-1 的正则只认 `$chat.find`，归位逻辑里两处
 `$chatNode.find('.mes')` 没被拦下，本轮改为匹配任何 `$chat*` 变量名。
+
+</details>
+
+<details>
+<summary>展开（第七批：V17.7.5 选项归属，用户实报「新 AI 楼生成中显示上一楼选项」）</summary>
+
+```
+✓ 补挂选项不看归属规则（把不该显示的旧选项挂回来）             → tt-virtualization
+✓ 选项显隐不看归属楼（= 修复前：最新楼是 AI 楼就显示）         → options-ownership
+✓ 生成中的数据变化也认领归属（DB 回退的上一楼选项挂到新楼）     → options-ownership
+✓ 楼层身份不含 send_date（删楼后同楼号重生成仍显示旧选项）     → options-ownership
+✓ 楼层身份不含 swipe_id（滑到新回复仍显示旧选项）              → options-ownership
+✓ 隐藏/系统楼不再跳过                                          → options-ownership
+✓ quiet 后台生成也算前台生成                                   → options-ownership
+✓ 停止生成不撤销「发送时先藏」                                 → options-ownership
+✓ 该藏时不移除已挂的选项                                       → options-ownership
+✓ 渲染不经归属门控（= 修复前的按钮生成条件）                   → options-ownership
+```
+
+「隐藏/系统楼不再跳过」第一版**无人发现**：用例里的隐藏楼恰好是用户楼，跳不跳结果都是 null。
+改成隐藏的非用户楼后才有区分力——又一次说明矩阵要跑，不能凭用例名字判断有没有牙齿。
 
 </details>
 
@@ -166,6 +187,10 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
   `tt-virtualization` 用的是按宿主源码（TT 2.3.0 `chat-dom-adapter.js` / `bounded-chat-surface.js`）
   归纳出的 MutationRecord 形状，证明的是「前端对这些输入的反应」，不是「宿主一定这样发」。
   真机行为仍需在 TT 上开虚拟化实测。
+- **选项归属的三个已知边界**（`options-ownership` 按设计钉住或未覆盖）：
+  ① 页面刚加载/刚切聊天时无从得知选项是哪一楼填的，按「属于当前最新楼层」认领；
+  ② 数据库这一楼没填选项（隔几楼填一次、填表失败、中途停止生成）时选项就不显示，直到下次选项更新——这是用户定的规则；
+  ③ 滑到新回复后若生成在 DB 回退通知（约 1.2s 防抖）之前就结束，回退数据会被当成新回复的选项短暂显示，直到填表完成。
 - **「绝不写活引用」目前只有注释约束**，没有可执行守卫。
   `data-plumbing` 的 P-4 已把「`processJsonData` 不改入参」与「rows 与活引用共享行数组」
   钉成断言，将来有人往 `verifyTables` 上写会先看到它失败——但那需要有人先跑测试。

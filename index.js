@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.4'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.5'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -171,11 +171,15 @@
         catchupLastFp = null;
     };
 
-    let hideOptionsUntilUpdate = false;
-    // 按楼层号（mesid）记锚点而不是元素本身：TT 虚拟化会把滚出又滚回的楼重建成新元素
-    let hiddenOptionsAnchorMesid = null;
+    // 选项归属：选项只属于「填出它的那一楼」，当且仅当该楼仍是最新楼层且是 AI 楼时才显示。
+    // optionsOwnerFloorKey = 选项数据最近一次（非生成期间）变化时的最新楼层身份（见 getLatestFloorKey）。
+    let optionsOwnerFloorKey = null;
+    // 宿主前台生成进行中：此期间的选项数据变化是 DB 在滑动/删楼后回退到上一楼的状态，不是新选项
+    let hostGenerating = false;
+    // 点了发送/选项后、用户楼还没入楼前（剧情推进等可能拖好几秒）先藏起，记下当时的最新楼层身份
+    let optionsSendSuppressedKey = null;
     // 最近一次渲染「想要」显示的嵌入块；虚拟化下目标楼被重建后据此补挂（见 reattachEmbedsAfterRemount）
-    let embedWanted = { dashboard: false, options: false };
+    let embedWanted = { dashboard: false };
     let lastEmbedReattachTarget = null;
     let lastOptionDataCheck = '';
 
@@ -3422,21 +3426,10 @@ ${allTableNames.map(tName => {
                 if (n > rowLimit) rs += sampleRow(n - 1) + ';'; // 末行补最新写入
                 return h + '@' + rs;
             }).join('~');
-            if (hideOptionsUntilUpdate && hiddenOptionsAnchorMesid != null) {
-                const currentMesid = mesidOfBlock(getEmbeddedTargetBlock());
-                if (currentMesid != null && currentMesid !== hiddenOptionsAnchorMesid) {
-                    hideOptionsUntilUpdate = false;
-                    hiddenOptionsAnchorMesid = null;
-                }
-            }
-            if (optionStr !== lastOptionDataCheck) {
-                hideOptionsUntilUpdate = false;
-                hiddenOptionsAnchorMesid = null;
-                lastOptionDataCheck = optionStr;
-            }
+            noteOptionDataChange(optionStr);
 
             let optionBtnContent = '';
-            let optBtnCount = 0; if (optionTables.length > 0 && !hideOptionsUntilUpdate) {
+            let optBtnCount = 0; if (optionTables.length > 0 && shouldShowOptions()) {
                 let buttonsHtml = '';
                 let hasBtns = false;
                 // 选项按钮封顶(性能审查第4轮 explore-56/57):大选项表每行每列都生成按钮,
@@ -3514,7 +3507,7 @@ ${allTableNames.map(tName => {
             insertHtmlToPage(html); 
 
             // 注入段各自独立兜错：若抛异常不能让 bindEvents 不达（否则新 DOM 零事件处理器，面板整体点不动）
-            embedWanted = { dashboard: !!(showDash && config.dashboardPosition === 'embedded'), options: !!optionBtnContent };
+            embedWanted = { dashboard: !!(showDash && config.dashboardPosition === 'embedded') };
             if (showDash && config.dashboardPosition === 'embedded') {
                  try {
                      const dashHtml = renderDashboard(tables, true);
@@ -3891,13 +3884,54 @@ ${allTableNames.map(tName => {
     };
     const mesidOfBlock = ($block) => ($block && $block.length ? $block.closest('.mes').attr('mesid') : undefined);
 
-    // 发送后隐藏选项只针对当前可见 AI 楼；新楼出现即解除，避免选项表未变化时永久消失。
-    const hideOptionsUntilAnchorChanges = () => {
-        const anchorMesid = mesidOfBlock(getEmbeddedTargetBlock());
-        if (anchorMesid == null) return;
-        hiddenOptionsAnchorMesid = anchorMesid;
-        hideOptionsUntilUpdate = true;
-        $('.acu-embedded-options-container').hide();
+    // 最新楼层身份：跳过隐藏/系统楼后的最后一楼；是用户楼返回 null，拿不到 chat[] 返回 undefined。
+    // 身份含 swipe_id 与 send_date：滑到新回复、或删楼后同楼号重新生成，都算「另一楼」。
+    const getLatestFloorKey = () => {
+        const chat = getHostChat();
+        if (!chat) return undefined;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const m = chat[i];
+            if (!m || m.is_system) continue;
+            if (m.is_user) return null;
+            return `${i}|${m.swipe_id ?? 0}|${m.send_date ?? ''}`;
+        }
+        return null;
+    };
+
+    // 选项数据变了：不在生成中 → 归属当前最新楼层（null = 最新楼不是 AI 楼，不显示）。
+    // 生成中的变化只记指纹不认领：那是 DB 在滑动/删楼后重放到上一楼的数据。
+    const noteOptionDataChange = (optionStr) => {
+        if (optionStr === lastOptionDataCheck) return;
+        lastOptionDataCheck = optionStr;
+        if (!hostGenerating) optionsOwnerFloorKey = getLatestFloorKey();
+    };
+
+    const shouldShowOptions = () => {
+        const latest = getLatestFloorKey();
+        if (latest === undefined) return true; // 拿不到聊天数据：无从判断，保持旧行为
+        return latest !== null && latest === optionsOwnerFloorKey && latest !== optionsSendSuppressedKey;
+    };
+
+    // 楼层/生成状态变了（没有表格通知也要跟上）：该藏就立刻拿掉，该显而没显就走一次常规渲染。
+    const syncOptionsVisibility = () => {
+        const { $ } = getCore();
+        if (!$) return;
+        const show = shouldShowOptions();
+        const $opts = $('.acu-embedded-options-container');
+        if (!show) {
+            if ($opts.length) $opts.remove();
+            return;
+        }
+        // 目标楼没挂载（虚拟化下翻到了别处）时无处可挂，等它挂载后由 reattachEmbedsAfterRemount 补
+        if (!$opts.length && !inEditingContext() && getEmbeddedTargetBlock()) {
+            try { renderInterface(false); } catch (_) {}
+        }
+    };
+
+    // 点发送/点选项的那一刻先藏：用户楼要等剧情推进等前置处理完才入楼，期间最新楼层还是旧 AI 楼。
+    const suppressOptionsForSend = () => {
+        optionsSendSuppressedKey = getLatestFloorKey();
+        $('.acu-embedded-options-container').remove();
     };
 
     // 正文列内容盒 = .mes_text 去掉左右 padding 后的可视文字区。
@@ -4066,7 +4100,7 @@ ${allTableNames.map(tName => {
         if (!$target || !$target.length || $target[0] === lastEmbedReattachTarget) return false;
         const missing = (wanted, sel) => wanted && !$target.children(sel).length;
         if (missing(embedWanted.dashboard, '.acu-embedded-dashboard-container')
-            || missing(embedWanted.options && !hideOptionsUntilUpdate, '.acu-embedded-options-container')) {
+            || missing(shouldShowOptions() && lastOptionDataCheck !== '', '.acu-embedded-options-container')) {
             try { renderInterface(false); } catch (_) {}
             lastEmbedReattachTarget = $target[0];
             return true;
@@ -5210,11 +5244,11 @@ const checkRowChanged = (realIdx, row) => {
         });
 
         $('#send_but').off('click.acu_opt_hide').on('click.acu_opt_hide', function() {
-             hideOptionsUntilAnchorChanges();
+             suppressOptionsForSend();
         });
         $('#send_textarea').off('keydown.acu_opt_hide').on('keydown.acu_opt_hide', function(e) {
              if (e.key === 'Enter' && !e.shiftKey) {
-                 hideOptionsUntilAnchorChanges();
+                 suppressOptionsForSend();
              }
         });
         
@@ -5235,7 +5269,7 @@ const checkRowChanged = (realIdx, row) => {
                  if (!config.clickOptionToAutoSend) ta.focus();
                  
                  if (config.clickOptionToAutoSend) {
-                     hideOptionsUntilAnchorChanges();
+                     suppressOptionsForSend();
 
                      const sendBtn = parentDoc.getElementById('send_but');
                      if(sendBtn) sendBtn.click();
@@ -6115,6 +6149,9 @@ const checkRowChanged = (realIdx, row) => {
                      if (api.registerTableFillStartCallback) {
                          // 填表开始：存一份快照 + 启动稳定轮询（填表跑完自动兜底刷新）
                          api.registerTableFillStartCallback(() => {
+                             // 自动填表在 GENERATION_ENDED 之后才开始：走到这里说明前台生成已结束，
+                             // 兜住宿主漏发 ENDED 时 hostGenerating 卡死（选项将永远认领不到楼层）
+                             hostGenerating = false;
                              // exportTableAsJson 返回 DB 活引用，快照必须克隆（与 :5416 语义对齐），
                              // 否则填表期 DB 原地更新会使高亮基线漂移
                              try { const c = api.exportTableAsJson(); if (c) saveSnapshot(cloneTableData(c)); } catch (_) {}
@@ -6163,6 +6200,11 @@ const checkRowChanged = (realIdx, row) => {
                                  selectedRows.clear();
                                  pendingDeletes.clear();
                                  pendingDeleteRowIds.clear();
+                                 // 选项归属跨聊天作废：下一次渲染把新聊天的选项归给其最新楼层
+                                 lastOptionDataCheck = '';
+                                 optionsOwnerFloorKey = null;
+                                 optionsSendSuppressedKey = null;
+                                 hostGenerating = false;
                                  if (!isEditingOrder) renderInterface(true);
                              });
                          }
@@ -6184,8 +6226,37 @@ const checkRowChanged = (realIdx, row) => {
                          }
                      } catch (e) { console.warn('[ACU-UI] 订阅 MESSAGE_UPDATED 失败，被替换正文即时刷新未启用:', e); }
                  };
+                 // 选项只跟随最新楼层：楼层增删/滑动/生成起止都可能让「最新楼是不是选项的归属楼」翻转，
+                 // 而这些时刻 DB 未必发表格通知，所以直接听宿主事件重判一次显隐。
+                 const trySubscribeFloorEvents = () => {
+                     try {
+                         const { evSrc, evTypes } = getHostEventBus();
+                         if (!evSrc || typeof evSrc.on !== 'function' || !evTypes) return;
+                         let syncTimer = null;
+                         const scheduleSync = () => {
+                             if (syncTimer) return;
+                             syncTimer = setTimeout(() => { syncTimer = null; syncOptionsVisibility(); }, 0);
+                         };
+                         const on = (name, fn) => { if (evTypes[name]) evSrc.on(evTypes[name], fn); };
+                         on('GENERATION_STARTED', (type, params, dryRun) => {
+                             // quiet/dryRun 是后台生成（不产生新楼层），不影响选项归属
+                             if (dryRun || type === 'quiet' || (params && params.quiet_prompt)) return;
+                             hostGenerating = true;
+                             scheduleSync();
+                         });
+                         const onGenerationSettled = () => {
+                             hostGenerating = false;
+                             optionsSendSuppressedKey = null;
+                             scheduleSync();
+                         };
+                         on('GENERATION_ENDED', onGenerationSettled);
+                         on('GENERATION_STOPPED', onGenerationSettled);
+                         ['MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED']
+                             .forEach((name) => on(name, scheduleSync));
+                     } catch (e) { console.warn('[ACU-UI] 订阅楼层事件失败，选项显隐只随表格刷新更新:', e); }
+                 };
                  // TT 增量：若存在 __TAURITAVERN__.ready，待宿主就绪后再订阅，避免 importWithRetry 竞态漏接；ST 无该符号时短路走原路径
-                 const subscribeHostEvents = () => { trySubscribeChatChanged(); trySubscribeMessageUpdated(); };
+                 const subscribeHostEvents = () => { trySubscribeChatChanged(); trySubscribeMessageUpdated(); trySubscribeFloorEvents(); };
                  try {
                      const ttReady = (typeof window !== 'undefined' && (window.__TAURITAVERN__?.ready || window.__TAURITAVERN_MAIN_READY__));
                      if (ttReady && typeof ttReady.then === 'function') ttReady.then(subscribeHostEvents).catch(subscribeHostEvents);
