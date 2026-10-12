@@ -2,7 +2,9 @@
 
 SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数据库表格，支持表格浏览、单元格编辑、整体编辑、插入行、删除行、选项面板、仪表盘等功能。**其中单元格/整体编辑、插入行、删除行默认关闭**（在「全能设置 → 表格管理 → 允许手动编辑表格」开启），默认状态下为纯查看。
 
-> ⚠️ **停止维护公告**：本前端为同一份代码，目前同时适配 SillyTavern（ST 酒馆）与 TauriTavern（TT 酒馆）两个环境。自 **2026 年 9 月 7 日** 起将**停止对 ST 酒馆环境的适配维护**：此后所有更新仅在 TT 酒馆验证，ST 侧兼容问题（含数据库版本更新后出现的）不再处理，ST 上的可用性不再保证。如有需要，请提前迁移至 TT 酒馆。（ST 用户更新到 V17.4.10 后会看到一次弹窗提示）
+> 📌 **关于本仓库**：这是 [shuiyue-cmyk/st-acu-visualizer](https://github.com/shuiyue-cmyk/st-acu-visualizer)（维护者 Crino）的 fork。原仓库自 2026-09-07 起不再适配原版 SillyTavern（ST 酒馆），本仓库在它的基础上**继续维护 ST 酒馆这一侧**，并对齐最新的 [AlbusKen/shujuku](https://github.com/AlbusKen/shujuku)（龙血玄黄·数据库）。TT 酒馆的适配代码原样保留，但本仓库没有在 TT 上实测。
+>
+> 如果你之前用的是「酒馆助手脚本版」可视化前端（JSON 导入的那个），安装本扩展后请在酒馆助手里**关掉旧脚本**，否则会出现两个前端。两者的设置存在同一个位置，原来的设置会直接沿用。
 
 ## 安装（无需手动导入 JSON）
 
@@ -11,7 +13,7 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 3. 使用 **「Install extension from Git URL」** 入口
 4. 粘贴本仓库地址：
    ```
-   https://github.com/shuiyue-cmyk/st-acu-visualizer
+   https://github.com/LovanandYori/st-acu-visualizer
    ```
 5. 安装完成后刷新 SillyTavern
 
@@ -36,10 +38,10 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 
 ## 与数据库版本适配
 
-- **主基线**：TauriTavern（TT 酒馆）`2.3.0` + 数据库 [`shuiyue-cmyk/shujuku-rebuild`](https://github.com/shuiyue-cmyk/shujuku-rebuild)
-- **次基线**：SillyTavern（ST 酒馆）+ 数据库 [`AlbusKen/shujuku`](https://github.com/AlbusKen/shujuku)
+- **本仓库维护**：SillyTavern（ST 酒馆）+ 数据库 [`AlbusKen/shujuku`](https://github.com/AlbusKen/shujuku)
+- **原样保留（未实测）**：TauriTavern（TT 酒馆）`2.3.0` + 数据库 [`shuiyue-cmyk/shujuku-rebuild`](https://github.com/shuiyue-cmyk/shujuku-rebuild)，即原仓库 V17.7.5 时的主基线
 
-**当前版本 V17.7.5 适配 TT 酒馆 `2.3.0`（`a1855be4`）+ TT 库 `9.10.3`（`93eca17`）/ ST 库 `1.0.0`（`fd91407f`，显示名已改为「龙血玄黄·数据库」）。**
+**当前版本 V17.7.6 适配 ST 库 `1.2.9`（`e445c96`）；TT 部分沿用 V17.7.5 时的 TT 酒馆 `2.3.0`（`a1855be4`）+ TT 库 `9.10.3`（`93eca17`）。**
 
 > ST 库自 `1.0.0` 起**重置了版本号**（此前为 9.x）并更名，故同一仓出现了两条并行的版本序列。
 > 表格里 ST 列写的都是该库**自己 manifest 里的 version**，未做任何换算。
@@ -48,6 +50,7 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 
 | 前端版本 | ST 数据库 | TT 数据库（shujuku-rebuild） |
 |---|---|---|
+| V17.7.6（本 fork） | 1.2.9（`e445c96`） | 9.10.3（未实测） |
 | V17.7.2 ~ V17.7.5 | 1.0.0（`fd91407f`，更名） | 9.10.3 |
 | V17.6.10 ~ V17.7.1 | 9.2.5 | 9.10.3 |
 | V17.6.5 ~ V17.6.9 | 9.2.5 | 9.6.8 |
@@ -70,26 +73,24 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 - 原作者：夏休期
 - 二改：a1185673398
 - 三改：星火（已休眠）
-- 现维护：Crino
+- 四改：Crino（原仓库 [shuiyue-cmyk/st-acu-visualizer](https://github.com/shuiyue-cmyk/st-acu-visualizer)，V16.4 ~ V17.7.5）
+- 现维护（本 fork，ST 酒馆侧）：LovanandYori
+- 思路借鉴：九颜、Zaria
 
 ### 测试
 
 零依赖，改完代码跑一下：
 
 ```bash
-node tests/run-all.js                        # 328 项断言
+node tests/run-all.js                        # 395 项断言
 python tests/sabotage-matrix.py              # 注入矩阵：验证测试本身有效
-node tests/run-all.js --db <TT库> --db <ST库>   # 附带跨仓数据库契约（共 392 项，数据库更新后必跑）
+node tests/run-all.js --db <ST库>              # 附带数据库契约（ST 库 1.2.9 时共 428 项，数据库更新后必跑）
+```
+
+另有一份浏览器场景测试（需要 Python + Playwright + Chromium，不是零依赖）：用假的酒馆页面和按数据库 1.2.9 行为写的假数据库，回放自动填表高亮、换聊天、多选删除、空表诊断等 14 个场景：
+
+```bash
+python3 -I tests/browser-harness.py index.js   # V17.7.6 应为 26/26
 ```
 
 所守契约与设计取舍见 [`tests/README.md`](tests/README.md)。
-
----
-
-## 支持我
-
-我一直在用 **OpenCode Go** 的套餐游玩酒馆，如果你也喜欢用 AI 游玩酒馆，欢迎使用我的专属链接一起获得额外 **5 美元** 额度：
-
-**https://opencode.ai/go?ref=S2XBM2KR89**
-
-> 通过此链接注册/使用 OpenCode Go，你将直接支持本项目的持续维护 ❤️ — 感谢每一位支持者！

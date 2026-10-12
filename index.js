@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.5'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.6'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -13,7 +13,6 @@
     const STORAGE_KEY_REVERSE_TABLES = 'acu_reverse_tables';
     const STORAGE_KEY_HIDDEN_TABLES = 'acu_hidden_tables';
     const STORAGE_KEY_TABLE_STYLES = 'acu_table_styles';
-    const STORAGE_KEY_ST_EOL = 'acu_st_eol_notice_v2'; // ST 停维公告只弹一次（v2=订正文案后重弹一次）
 
     // HTML 转义工具(网络安全审查 deepseek-v4-pro):DB 表数据(表名/列名/单元格=角色卡/AI填表内容)
     // 模板插值原样拼 HTML 是存储型 XSS 面,统一转义 & < > " ' 五字符。
@@ -106,8 +105,21 @@
     // 字面量 "null"，既污染显示与搜索，又会被 readCellValue 兜底当成真实内容写回库。
     const cellText = (cell) => (cell === null || cell === undefined ? '' : String(cell));
 
+    // 弹窗遮罩关闭：只有「按下」和「松开」都在遮罩上才关闭。否则在输入框里拖选文字、
+    // 松手时鼠标落到弹窗外，会被当成点遮罩而直接关窗，用户输入全部丢失。
+    const bindBackdropClose = ($overlay, close) => {
+        let pressedOnBackdrop = false;
+        $overlay.on('pointerdown', e => { pressedOnBackdrop = e.target === $overlay[0]; });
+        $overlay.on('click', e => {
+            const shouldClose = pressedOnBackdrop && e.target === $overlay[0];
+            pressedOnBackdrop = false;
+            if (shouldClose) close();
+        });
+    };
+
     const TAB_DASHBOARD = 'acu_tab_dashboard_home';
     const STORAGE_KEY_DASH_CONFIG = 'acu_dash_config_v1';
+    const STORAGE_KEY_DASH_COLLAPSE = 'acu_dash_collapse_state';
     let isDashEditing = false;
 
 
@@ -209,6 +221,8 @@
             // 从 DB 统一 clone + 重算 diffMap（若走 renderInterface(false)，getTableData(false) 缓存
             // 命中会重置 lastTableDataRefreshed，diffMap 高亮陈旧——交叉验证确认的缺陷）。
             // 不手动 clone incomingData：通知时 DB 已换新引用，重拉即最新，避免双 clone。
+            // 先用「刷新前前端正在显示的数据」推进高亮基线（必须在清缓存之前）
+            rebaseHighlightBaseline();
             lastRawTableRef = null;
             lastTableSetFingerprint = '';
             lastTableDataRefreshed = true;
@@ -563,6 +577,28 @@
         } catch (e) {
             try { localStorage.removeItem(STORAGE_KEY_LAST_SNAPSHOT); } catch (_) {}
         }
+    };
+
+    // 高亮基线推进（ST 数据库 1.2.7 起适配）：数据库的自动填表不再发「填表开始」通知
+    // （默认存储模式下从来不发），只在填表结束时发一次表格更新通知。原先只靠填表开始
+    // 存快照，自动填表后的高亮会对着很久以前的旧基线，越积越多。
+    // 现在每次收到外部更新通知时：若这次数据真的变了，就把「刷新前前端正在显示的数据」
+    // 作为新基线；数据没变的通知保留现有高亮；若填表开始已经存过快照，则以它为准。
+    let fillStartedSinceUpdate = false;
+    const rebaseHighlightBaseline = () => {
+        if (fillStartedSinceUpdate) { fillStartedSinceUpdate = false; return; }
+        if (isSaving) return; // 前端自己的写入由保存流程负责推进快照
+        try {
+            const api = getCore().getDB();
+            const fresh = api && typeof api.exportTableAsJson === 'function' ? api.exportTableAsJson() : null;
+            if (!fresh || typeof fresh !== 'object') return;
+            // 还没有基线（切聊天后快照已清空），或前端正在显示的是空数据（页面刚加载、数据库还没
+            // 读完聊天；切聊天时数据库会先发一次「已清空」通知）：直接以当前数据建立基线，
+            // 不把整张表误标为变化。数据库读完聊天会再发一次通知，之后的填表就能正常高亮。
+            if (!loadSnapshot() || !cachedTableData || !auditTableRows(cachedTableData).rows) { saveSnapshot(cloneTableData(fresh)); return; }
+            const sheetsText = (data) => JSON.stringify(Object.keys(data).filter(k => k.startsWith('sheet_')).sort().map(k => [k, data[k] && data[k].content]));
+            if (sheetsText(fresh) !== sheetsText(cachedTableData)) saveSnapshot(cloneTableData(cachedTableData));
+        } catch (_) { /* 读取失败时保留原基线 */ }
     };
 
     // 单元格编辑成功后只推进内存快照中的目标格，避免下次 diff/排序把用户刚改的行
@@ -2073,6 +2109,74 @@
         return queued;
     };
 
+    // 空表读取诊断：「没有表」和「有表但只有表头」是两回事。如果前端读到的全是空表，
+    // 而当前聊天里却保存过表格数据，多半是装了两份数据库——数据库在导入时就把公共接口
+    // 挂到酒馆窗口上，早于它自己的重复实例检查，后加载的那份（内存是空的）会覆盖接口。
+    // 前端拿不到另一份实例的数据，只能把情况讲清楚，提示用户只保留一份。
+    const STORED_TABLE_KEYS = ['TavernDB_ACU_IsolatedData', 'TavernDB_ACU_Data', 'TavernDB_ACU_IndependentData', 'TavernDB_ACU_SummaryData'];
+    const countStoredTableFloors = () => {
+        try {
+            const w = window.parent || window;
+            const ST = w.SillyTavern || window.SillyTavern;
+            const chat = ST && typeof ST.getContext === 'function' ? ST.getContext()?.chat : null;
+            if (!Array.isArray(chat)) return null;
+            let floors = 0;
+            for (const message of chat) {
+                if (!message || typeof message !== 'object') continue;
+                if (STORED_TABLE_KEYS.some(key => {
+                    const value = message[key];
+                    if (value == null || value === '') return false;
+                    return typeof value !== 'object' || Object.keys(value).length > 0;
+                })) floors++;
+            }
+            return floors;
+        } catch (_) { return null; }
+    };
+    const countDatabaseMenuEntries = () => {
+        try { return (window.parent || window).document.querySelectorAll('#extensionsMenu .fa-database').length; }
+        catch (_) { return null; }
+    };
+    const auditTableRows = (data) => {
+        const audit = { tables: 0, withRows: 0, rows: 0 };
+        if (!data || typeof data !== 'object') return audit;
+        for (const key of Object.keys(data)) {
+            const sheet = data[key];
+            if (!key.startsWith('sheet_') || !sheet || !sheet.name || !Array.isArray(sheet.content)) continue;
+            audit.tables++;
+            const rows = Math.max(0, sheet.content.length - 1);
+            audit.rows += rows;
+            if (rows) audit.withRows++;
+        }
+        return audit;
+    };
+    // 表都在但全是空表，且聊天里保存过表格 → 返回统计；否则 null
+    const getEmptyReadMismatch = (data = cachedTableData) => {
+        const audit = auditTableRows(data);
+        if (!audit.tables || audit.rows) return null;
+        const floors = countStoredTableFloors();
+        return floors ? { ...audit, floors } : null;
+    };
+    const EMPTY_MISMATCH_HINT = '前端读到的全是空表，但当前聊天里保存过表格数据。如果数据库自带的编辑器里能看到内容，多半是数据库装了两份（例如插件版和酒馆助手脚本版同时启用、全局脚本和角色脚本里各一份，或新旧版本同时启用），前端连到了没有数据的那一份。请只保留一份最新版数据库，然后刷新酒馆页面。';
+    const getTableReadReport = (data) => {
+        const api = getCore().getDB();
+        const audit = auditTableRows(data);
+        const floors = countStoredTableFloors();
+        const menuEntries = countDatabaseMenuEntries();
+        const lines = [
+            `前端：V${EXT_VERSION}`,
+            `数据库接口：${api ? '已连接' : '未连接'}；exportTableAsJson：${typeof api?.exportTableAsJson === 'function' ? '有' : '无'}`,
+            `表格：${audit.tables} 张；有数据的表：${audit.withRows}；数据行：共 ${audit.rows} 行`,
+            `聊天中保存过表格的楼层：${floors === null ? '无法读取' : floors}；扩展菜单数据库入口：${menuEntries === null ? '无法读取' : menuEntries}`,
+            '诊断仅包含状态和数量，不包含表格、聊天内容或账号信息。'
+        ];
+        if (menuEntries > 1) lines.push('扩展菜单里有多个数据库入口，可能同时启用了多份数据库。');
+        let message = '';
+        if (!api) message = '没有连接到数据库接口：请确认数据库已安装并启用，然后刷新酒馆页面。';
+        else if (!audit.tables) message = '暂时没有读到任何表格：如果是新聊天，发一条消息等数据库建表后会自动显示。';
+        else if (!audit.rows) message = floors ? EMPTY_MISMATCH_HINT : '已读取到表格，但所有表都还没有数据（只有表头）。填表完成后会自动显示。';
+        return { message, text: lines.join('\n'), warn: !!(api && audit.tables && !audit.rows && floors) };
+    };
+
     const processJsonData = (json) => {
         const tables = {};
         if (!json || typeof json !== 'object') return {};
@@ -2102,10 +2206,15 @@
         $('.acu-edit-overlay').remove();
         const config = getConfig();
         let allTableNames = [];
+        // 每张表的数据行数 + 读取诊断（空表/两份数据库时自动展开并标红）
+        const tableRowCounts = { total: 0 };
+        let readReport = { message: '', text: '', warn: false };
         try {
             const rawData = getTableData();
             const processed = processJsonData(rawData || {});
             allTableNames = Object.keys(processed || {});
+            allTableNames.forEach(n => { const c = (processed[n].rows || []).length; tableRowCounts[n] = c; tableRowCounts.total += c; });
+            readReport = getTableReadReport(rawData);
         } catch (e) {
             console.warn('[ACU-UI] showSettingsModal: 读取表名失败，以空列表继续:', e);
             allTableNames = [];
@@ -2582,13 +2691,18 @@
         </label>
     </div>
 </div>
+${readReport.message ? `<div class="acu-table-empty-hint" style="padding:12px;line-height:1.6;color:${readReport.warn ? '#e74c3c' : 'var(--acu-text-sub)'};">${escapeHtml(readReport.message)}</div>` : ''}
+<details class="acu-read-diagnostics" ${(!allTableNames.length || readReport.warn) ? 'open' : ''} style="padding:8px 0;line-height:1.6;font-size:12px;overflow-wrap:anywhere;">
+<summary style="cursor:pointer;">读取诊断</summary>
+<div class="acu-read-report" style="white-space:pre-wrap;user-select:text;">${escapeHtml(readReport.text)}</div>
+</details>
 ${allTableNames.map(tName => {
     const isHidden = hiddenTables.includes(tName);
     const isReversed = reversedTables.includes(tName);
     return `
         <div class="acu-control-row">
             <div class="acu-label-col">
-                <span class="acu-label-main">${escapeHtml(tName)}</span>
+                <span class="acu-label-main">${escapeHtml(tName)} <span style="font-weight:normal;color:var(--acu-text-sub);">${tableRowCounts[tName] || 0} 行</span></span>
             </div>
             <div class="acu-input-col" style="display:flex; gap:10px; align-items:center;">
                 <label style="display:flex; align-items:center; gap:5px; cursor:pointer;">
@@ -2605,7 +2719,7 @@ ${allTableNames.map(tName => {
                         </div>
 
                         <div style="display:flex; gap:10px; margin: 10px 0;">
-                            <a href="https://github.com/shuiyue-cmyk/st-acu-visualizer" target="_blank" rel="noopener noreferrer" class="acu-btn-block" style="margin:0; flex:1; justify-content:center; padding:12px; text-decoration:none; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-star"></i> 给项目点个星</a>
+                            <a href="https://github.com/LovanandYori/st-acu-visualizer" target="_blank" rel="noopener noreferrer" class="acu-btn-block" style="margin:0; flex:1; justify-content:center; padding:12px; text-decoration:none; display:inline-flex; align-items:center; gap:6px;"><i class="fa-solid fa-star"></i> 给项目点个星</a>
                         </div>
 
                     </div>
@@ -2813,7 +2927,7 @@ ${allTableNames.map(tName => {
         });
         dialog.find('#btn-enter-sort').click(() => { dialog.remove(); toggleOrderEditMode(); });
         dialog.find('#dlg-close').click(() => { dialog.remove(); renderInterface(false); });
-        dialog.on('click', function(e) { if ($(e.target).hasClass('acu-edit-overlay')) dialog.remove(); });
+        bindBackdropClose(dialog, () => dialog.remove());
     };
 
         
@@ -2871,7 +2985,9 @@ ${allTableNames.map(tName => {
                 }
             } else {
                 // 首次创建或位置变更
-                let isCollapsed = true; 
+                // 记住上次展开/收起（默认收起）：新回复会新建容器，不记的话每次新回复仪表盘都会自己收起
+                let isCollapsed = true;
+                try { isCollapsed = localStorage.getItem(STORAGE_KEY_DASH_COLLAPSE) !== 'false'; } catch (_) {}
                 if (isDashEditing) isCollapsed = false;
 
                 const $container = $('<div class="acu-embedded-dashboard-container" style="margin-top: 6px; width: 100%; clear: both;"></div>');
@@ -2935,10 +3051,12 @@ ${allTableNames.map(tName => {
                         $wrapper.css({ 'height': (window.innerWidth <= 768 ? 'auto' : '500px'), 'opacity': '1', 'padding': '0' });
                         $header.css({ 'border-radius': '12px 12px 0 0', 'margin-bottom': '-1px' });
                         $container.find('#acu-btn-dash-edit-emb').css('display', 'inline-flex');
+                        try { localStorage.setItem(STORAGE_KEY_DASH_COLLAPSE, 'false'); } catch (_) {}
                     } else {
                         $wrapper.css({ 'height': '0', 'opacity': '0', 'padding': '0' });
                         $header.css({ 'border-radius': '12px', 'margin-bottom': '0' });
                         $container.find('#acu-btn-dash-edit-emb').hide();
+                        try { localStorage.setItem(STORAGE_KEY_DASH_COLLAPSE, 'true'); } catch (_) {}
                     }
                 });
 
@@ -3550,7 +3668,20 @@ ${allTableNames.map(tName => {
             'slot_6_1': {isEmpty:true}, 'slot_6_2': {isEmpty:true}
         };
 
-        const getSlotCfg = (id) => ({ ...defaults[id], ...(dashConfig[id] || {}) });
+        const getSlotCfg = (id) => {
+            const cfg = { ...defaults[id], ...(dashConfig[id] || {}) };
+            // 旧配置里可能有「没填表名」的卡槽：当作未配置，而不是显示「未找到表格:」
+            if (!cfg.isEmpty && !String(cfg.text ?? '').trim()) cfg.isEmpty = true;
+            return cfg;
+        };
+        // 表存在但没有数据行时，区分「新聊天还没填表」和「读到了空的那份数据库」
+        const emptyMismatch = getEmptyReadMismatch();
+        const renderSlotMissing = (keyword, table) => {
+            const text = !table ? `未找到表格：${escapeHtml(keyword)}`
+                : emptyMismatch ? `「${escapeHtml(keyword)}」读到的是空表，请到 设置 → 表格管理 查看读取诊断`
+                : `「${escapeHtml(keyword)}」暂无数据`;
+            return `<div style="padding:15px; color:var(--acu-text-sub); font-size:12px; text-align:center; line-height:1.6;">${text}</div>`;
+        };
 
         const findKey = (keyword, exact = false) => {
             if (!keyword) return null;
@@ -3575,7 +3706,7 @@ ${allTableNames.map(tName => {
                     const entry = { isEmpty: false, title: (k.endsWith('表') ? k.slice(0, -1) : k), text: k, rule: s.rule };
                     let valid = false;
                     if (s.rule === 'kv') {
-                        if (t.rows && t.rows.length) { entry.card = t.rows[0][1]; }
+                        // 不绑定具体卡片名：跟随第一行，换聊天或第一行改名后仍然有效
                         if (s.cols) entry.showCols = s.cols;
                         valid = true;
                     } else if (s.rule === 'capsule') {
@@ -3595,9 +3726,7 @@ ${allTableNames.map(tName => {
             const key = findKey(keyword);
             const table = key ? tables[key] : null;
 
-            if (!table || !table.rows || table.rows.length === 0) {
-                return `<div style="padding:15px; color:var(--acu-text-sub); font-size:12px; text-align:center;">未找到表格: ${escapeHtml(keyword)}</div>`;
-            }
+            if (!table || !table.rows || table.rows.length === 0) return renderSlotMissing(keyword, table);
 
             const headers = table.headers || [];
             let targetRow = table.rows[0];
@@ -3634,9 +3763,7 @@ ${allTableNames.map(tName => {
             const key = findKey(keyword);
             const table = key ? tables[key] : null;
 
-            if (!table || !table.rows || table.rows.length === 0) {
-                 return `<div style="padding:15px; color:var(--acu-text-sub); font-size:12px; text-align:center;">未找到表格: ${escapeHtml(keyword)}</div>`;
-            }
+            if (!table || !table.rows || table.rows.length === 0) return renderSlotMissing(keyword, table);
 
             const targetColIdx = (cfg.capCol !== undefined && cfg.capCol !== null) ? parseInt(cfg.capCol) : 1;
             const capCols = cfg.capCols || 0;
@@ -4290,7 +4417,7 @@ ${allTableNames.map(tName => {
     };
 
     const renderTableContent = (tableData, tableName) => {
-        if (!tableData || !tableData.rows.length) return `<div class="acu-panel-header"><div class="acu-panel-title">${escapeHtml(tableName)} ${(tableData && tableData._missingInfo) ? '<span style="color:#e74c3c;font-weight:bold;">缺少' + escapeHtml(tableData._missingInfo) + '</span>' : ((tableData && tableData._hasWarning) ? '<span style="color:#e74c3c;font-weight:bold;">数量异常</span>' : '<span style="color:var(--acu-text-sub);font-weight:normal;">0</span>')}</div><div class="acu-header-actions"><button class="acu-header-btn" id="acu-btn-close" title="关闭"><i class="fa-solid fa-times"></i></button></div></div><div class="acu-panel-content"><div style="text-align:center;color:var(--acu-text-sub);padding:20px;">暂无数据</div></div>`;
+        if (!tableData || !tableData.rows.length) return `<div class="acu-panel-header"><div class="acu-panel-title">${escapeHtml(tableName)} ${(tableData && tableData._missingInfo) ? '<span style="color:#e74c3c;font-weight:bold;">缺少' + escapeHtml(tableData._missingInfo) + '</span>' : ((tableData && tableData._hasWarning) ? '<span style="color:#e74c3c;font-weight:bold;">数量异常</span>' : '<span style="color:var(--acu-text-sub);font-weight:normal;">0</span>')}</div><div class="acu-header-actions"><button class="acu-header-btn" id="acu-btn-close" title="关闭"><i class="fa-solid fa-times"></i></button></div></div><div class="acu-panel-content"><div style="text-align:center;color:var(--acu-text-sub);padding:20px;line-height:1.7;">${getEmptyReadMismatch() ? escapeHtml(EMPTY_MISMATCH_HINT) : '暂无数据'}</div></div>`;
         
         const headers = tableData.headers.slice(1);
         let titleColIndex = 1;const codeIdx = tableData.headers.findIndex(h => h && (String(h).includes('编码') || String(h).includes('索引')));if (codeIdx > 0) titleColIndex = codeIdx;
@@ -4328,7 +4455,7 @@ const checkRowChanged = (realIdx, row) => {
         if (useHeavyFastPath) {
             displayTotal = totalRaw;
             const totalPagesFast = Math.ceil(displayTotal / itemsPerPage) || 1;
-            if (currentPage > totalPagesFast) currentPage = 1;
+            if (currentPage > totalPagesFast) currentPage = totalPagesFast; // 删掉最后一页的行后停在新的最后一页，而不是跳回第 1 页
             if (currentPage < 1) currentPage = 1;
             const startIdx = (currentPage - 1) * itemsPerPage;
             const endIdx = Math.min(startIdx + itemsPerPage, totalRaw);
@@ -4358,12 +4485,15 @@ const checkRowChanged = (realIdx, row) => {
                 if (!currentSearchTerm) return items;
                 const term = String(currentSearchTerm).toLowerCase();
                 // 逐格 toLowerCase + some() 短路(匹配列靠前即停),单次过滤比整行 join 快
-                return items.filter(item => item.data && item.data.some(cell => cellText(cell).toLowerCase().includes(term)));
+                // 第 0 列是界面上不显示的 row_id，不参与搜索（否则搜「1」会命中所有行）
+                return items.filter(item => item.data && item.data.some((cell, c) => c > 0 && cellText(cell).toLowerCase().includes(term)));
             };
+            // 变化行置顶只在开启「新增内容高亮」时生效：看不到高亮时行序突然变化会让人困惑
+            const floatChanged = config.highlightNew === true;
             const doSort = (items) => {
                 items.sort((a, b) => {
-                    if (a.hasChange && !b.hasChange) return -1;
-                    if (!a.hasChange && b.hasChange) return 1;
+                    if (floatChanged && a.hasChange && !b.hasChange) return -1;
+                    if (floatChanged && !a.hasChange && b.hasChange) return 1;
                     if (isReversed) return b.originalIndex - a.originalIndex;
                     return a.originalIndex - b.originalIndex;
                 });
@@ -4376,7 +4506,7 @@ const checkRowChanged = (realIdx, row) => {
                 // 失效锚用 dataVersion(只在 getTableData 产生新 clone 时递增),不用 rows 引用——
                 // rows 数组每次 processJsonData content.slice(1) 重建,引用锚会永不命中(第二轮
                 // 审查 explore-61 实证)。
-                const cacheKey = tableName + '\u0001' + currentSearchTerm + '\u0001' + (isReversed ? 'r' : 'f') + '\u0001' + dataVersion;
+                const cacheKey = tableName + '\u0001' + currentSearchTerm + '\u0001' + (isReversed ? 'r' : 'f') + (floatChanged ? 'h' : '') + '\u0001' + dataVersion;
                 if (searchCacheKey === cacheKey && searchCacheResult) {
                     processedRows = searchCacheResult;
                 } else {
@@ -4392,7 +4522,7 @@ const checkRowChanged = (realIdx, row) => {
 
             displayTotal = processedRows.length;
             const totalPages = Math.ceil(displayTotal / itemsPerPage) || 1;
-            if (currentPage > totalPages) currentPage = 1;
+            if (currentPage > totalPages) currentPage = totalPages; // 删掉最后一页的行后停在新的最后一页，而不是跳回第 1 页
             if (currentPage < 1) currentPage = 1;
             const startIdx = (currentPage - 1) * itemsPerPage;
             const endIdx = startIdx + itemsPerPage;
@@ -4961,6 +5091,8 @@ const checkRowChanged = (realIdx, row) => {
                     cachedTableData = null;
                     lastRawTableRef = null;
                     lastTableSetFingerprint = '';
+                    // 删行会让后面的行整体上移一格；以删除后的数据为新基线，避免后面的行被误标为「变化」
+                    try { const _after = getTableData(true); if (_after) saveSnapshot(cloneTableData(_after)); currentDiffMap.clear(); } catch (_) {}
                     renderInterface(true);
                 } else {
                     cachedTableData = null; const _d = getTableData(true); if(_d) saveSnapshot(_d); currentDiffMap.clear(); renderInterface(true); if (window.toastr) window.toastr.info('已刷新');
@@ -5789,7 +5921,7 @@ const checkRowChanged = (realIdx, row) => {
             }
             closeDialog();
         });
-        dialog.on('click', function(e) { if ($(e.target).hasClass('acu-edit-overlay')) closeDialog(); });
+        bindBackdropClose(dialog, closeDialog);
     };
 
     const showEditDialog = (content, onSave) => {
@@ -5812,7 +5944,7 @@ const checkRowChanged = (realIdx, row) => {
         const closeDialog = () => dialog.remove();
         dialog.find('#dlg-cancel').click(closeDialog);
         dialog.find('#dlg-save').click(() => { onSave(dialog.find('textarea').val()); closeDialog(); });
-        dialog.on('click', function(e) { if ($(e.target).hasClass('acu-edit-overlay')) closeDialog(); });
+        bindBackdropClose(dialog, closeDialog);
     };
 
     
@@ -6037,7 +6169,7 @@ const checkRowChanged = (realIdx, row) => {
             renderInterface(false);
             close();
         });
-        dialog.on('click', function(e) { if ($(e.target).hasClass('acu-edit-overlay')) close(); });
+        bindBackdropClose(dialog, close);
     };
 
     const init = () => {
@@ -6114,31 +6246,6 @@ const checkRowChanged = (realIdx, row) => {
             }, POLL_INTERVAL_MS);
         };
 
-        // ST 停维公告：2026-09-07 起停止对 ST 环境的适配维护（同一份前端，此后更新仅在 TT 验证）。
-        // 只在 ST 宿主弹一次（弹出即记标，关窗不重弹），TT 宿主与旧版浏览器异常全部静默跳过。
-        const showStEolNotice = () => {
-            try {
-                if (window.__TAURITAVERN__ || window.__TAURITAVERN_MAIN_READY__) return;
-                if (localStorage.getItem(STORAGE_KEY_ST_EOL)) return;
-                localStorage.setItem(STORAGE_KEY_ST_EOL, '1');
-            } catch (_) { return; }
-            const jq = getCore().$;
-            if (!jq) return;
-            jq(`
-                <div class="acu-eol-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;background:rgba(0,0,0,0.55);z-index:2147483648;display:flex;justify-content:center;align-items:center;">
-                    <div style="background:var(--bg_content_2,#fff);color:var(--text1,#333);border-radius:12px;max-width:460px;width:90%;padding:22px 24px;box-shadow:0 12px 40px rgba(0,0,0,0.35);font-size:15px;line-height:1.8;">
-                        <div style="display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;margin-bottom:12px;"><i class="fa-solid fa-bullhorn"></i> 停止维护公告</div>
-                        <div>本前端为同一份代码，目前同时适配 <b>SillyTavern（ST 酒馆）</b>与 <b>TauriTavern（TT 酒馆）</b>两个环境。自 <b>2026 年 9 月 7 日</b> 起，将<b>停止对 ST 酒馆环境的适配维护</b>。</div>
-                        <div style="margin-top:8px;">此后所有更新仅在 TT 酒馆验证，ST 侧兼容问题（含数据库版本更新后出现的）不再处理，ST 上的可用性不再保证。如有需要，请提前迁移至 TT 酒馆。</div>
-                        <div style="margin-top:14px;text-align:right;"><button class="acu-eol-ok" style="cursor:pointer;border:none;border-radius:8px;padding:9px 22px;background:var(--ac-color,#4a7dff);color:#fff;font-size:14px;">我知道了</button></div>
-                    </div>
-                </div>
-            `).appendTo('body');
-            const close = () => jq('.acu-eol-overlay').remove();
-            jq('.acu-eol-ok').on('click', close);
-            jq('.acu-eol-overlay').on('click', (e) => { if (jq(e.target).hasClass('acu-eol-overlay')) close(); });
-        };
-
         const loop = () => {
              const { $ } = getCore();
              if (getCore().getDB()?.exportTableAsJson && $) {
@@ -6154,13 +6261,12 @@ const checkRowChanged = (realIdx, row) => {
                              hostGenerating = false;
                              // exportTableAsJson 返回 DB 活引用，快照必须克隆（与 :5416 语义对齐），
                              // 否则填表期 DB 原地更新会使高亮基线漂移
-                             try { const c = api.exportTableAsJson(); if (c) saveSnapshot(cloneTableData(c)); } catch (_) {}
+                             try { const c = api.exportTableAsJson(); if (c) { saveSnapshot(cloneTableData(c)); fillStartedSinceUpdate = true; } } catch (_) {}
                              startFillPoll();
                          });
                      }
                  }
                  isInitialized = true;
-                 setTimeout(showStEolNotice, 800);
                  // 修复串表：cachedTableData 是前端侧的深拷贝缓存，DB 内部 currentJsonTableData_ACU
                  // 在切换聊天时会被替换为新聊天的数据，但前端缓存不会自动失效；renderInterface(false)
                  // 走缓存路径，会把旧聊天的表显示到新聊天里。
@@ -6192,6 +6298,7 @@ const checkRowChanged = (realIdx, row) => {
                                  lastTableSetFingerprint = '';
                                  memorySnapshot_ACU = null;
                                  try { localStorage.removeItem(STORAGE_KEY_LAST_SNAPSHOT); } catch (_) {}
+                                 fillStartedSinceUpdate = false;
                                  currentDiffMap.clear();
                                  currentPage = 1;
                                  // 多选/待删状态跨聊天必须清空：rowKey 不含 chatId，新聊天同名表同索引会碰撞，
