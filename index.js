@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.6'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.7'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -298,7 +298,11 @@
         { id: 'apple', name: '苹果设计' },
         { id: 'claude', name: '克劳德风' },
         { id: 'blushglass', name: '粉白磨砂' },
-        { id: 'lavender', name: '香薰衣草' }
+        { id: 'lavender', name: '香薰衣草' },
+        // 透线：无圆角、无阴影、无磨砂，只用 1px 细线分隔。id 沿用酒馆助手脚本版 V13.6x 的
+        // traceline / traceline-light，选过旧透线主题的用户升级后直接生效。
+        { id: 'traceline-light', name: '透线 · 纯白' },
+        { id: 'traceline', name: '透线 · 纯黑' }
     ];
 
     // 毛玻璃类主题：overlay 需要拿到主题类才能套上「轻压暗 + 模糊」那组规则
@@ -417,7 +421,11 @@
         // （apple 主题就是这么写的，实测它其实一处阴影都没渲染）。
         blushglass: { bgNav: 'rgba(255, 252, 253, 0.78)', bgPanel: 'rgba(255, 253, 254, 0.8)', border: 'rgba(232, 107, 154, 0.24)', textMain: '#3d2b33', textSub: '#8a7480', uiColor: '#d1568a', btnBg: 'rgba(255, 250, 252, 0.82)', btnHover: 'rgba(255, 235, 243, 0.95)', btnActiveBg: '#e86b9a', btnActiveText: '#ffffff', tableHead: 'rgba(255, 240, 247, 0.78)', tableHover: 'rgba(232, 107, 154, 0.07)', shadow: 'rgba(209, 86, 138, 0.16)', cardBg: 'rgba(255, 255, 255, 0.8)', badgeBg: 'rgba(232, 107, 154, 0.12)', menuBg: 'rgba(255, 252, 253, 0.95)', menuText: '#3d2b33', inputBg: 'rgba(255, 255, 255, 0.85)', overlayBg: 'rgba(120, 60, 85, 0.3)' },
         // 香薰衣草(薰碧绮紫):薰衣草紫 + 薄荷绿淡,轻玻璃质感;accent #C7A3FF,深紫文字
-        lavender: { bgNav: '#F2EBF7', bgPanel: '#F5EFFA', border: '#E1D6EA', textMain: '#2E163D', textSub: '#746084', uiColor: '#C7A3FF', btnBg: '#FBF8FF', btnHover: '#F2EBF7', btnActiveBg: '#C7A3FF', btnActiveText: '#2E163D', tableHead: '#F2EBF7', tableHover: 'rgba(198, 160, 255, 0.10)', shadow: 'rgba(68, 39, 96, 0.10)', cardBg: '#FBF8FF', badgeBg: 'rgba(199, 163, 255, 0.14)', menuBg: '#FBF8FF', menuText: '#2E163D', inputBg: 'rgba(255, 255, 255, 0.7)', overlayBg: 'rgba(68, 39, 96, 0.2)' }
+        lavender: { bgNav: '#F2EBF7', bgPanel: '#F5EFFA', border: '#E1D6EA', textMain: '#2E163D', textSub: '#746084', uiColor: '#C7A3FF', btnBg: '#FBF8FF', btnHover: '#F2EBF7', btnActiveBg: '#C7A3FF', btnActiveText: '#2E163D', tableHead: '#F2EBF7', tableHover: 'rgba(198, 160, 255, 0.10)', shadow: 'rgba(68, 39, 96, 0.10)', cardBg: '#FBF8FF', badgeBg: 'rgba(199, 163, 255, 0.14)', menuBg: '#FBF8FF', menuText: '#2E163D', inputBg: 'rgba(255, 255, 255, 0.7)', overlayBg: 'rgba(68, 39, 96, 0.2)' },
+        // 透线 · 纯白 / 纯黑：半透明纯白（纯黑）底，按钮与卡片透明，层级只靠 1px 细线和字重区分。
+        // shadow 给 transparent：消费方都是 `box-shadow: 0 4px 15px var(--acu-shadow)`，透明即无阴影。
+        'traceline-light': { bgNav: 'rgba(255, 255, 255, 0.80)', bgPanel: 'rgba(255, 255, 255, 0.95)', border: 'rgba(0, 0, 0, 0.13)', textMain: '#111111', textSub: '#707070', uiColor: '#111111', btnBg: 'transparent', btnHover: 'rgba(0, 0, 0, 0.05)', btnActiveBg: '#111111', btnActiveText: '#ffffff', tableHead: 'transparent', tableHover: 'rgba(0, 0, 0, 0.04)', shadow: 'transparent', cardBg: 'transparent', badgeBg: 'rgba(0, 0, 0, 0.05)', menuBg: '#ffffff', menuText: '#111111', inputBg: 'rgba(0, 0, 0, 0.03)', overlayBg: 'rgba(0, 0, 0, 0.28)' },
+        traceline: { bgNav: 'rgba(0, 0, 0, 0.66)', bgPanel: 'rgba(0, 0, 0, 0.90)', border: 'rgba(255, 255, 255, 0.16)', textMain: '#f2f2f2', textSub: '#9a9a9a', uiColor: '#f2f2f2', btnBg: 'transparent', btnHover: 'rgba(255, 255, 255, 0.07)', btnActiveBg: '#f2f2f2', btnActiveText: '#000000', tableHead: 'transparent', tableHover: 'rgba(255, 255, 255, 0.05)', shadow: 'transparent', cardBg: 'transparent', badgeBg: 'rgba(255, 255, 255, 0.08)', menuBg: '#000000', menuText: '#f2f2f2', inputBg: 'rgba(255, 255, 255, 0.06)', overlayBg: 'rgba(0, 0, 0, 0.6)' },
     };
 
     
@@ -1682,6 +1690,190 @@
                 /* 滚动模式面板宽度不再用 CSS 猜值：由 alignWrapperToMessageColumnNow 与仪表盘/选项
                    同一测量对齐函数写入（planPanelAlignment，inset-3px），此处仅保留盒模型兜底 */
                 .acu-wrapper.acu-tt-scroll { box-sizing: border-box !important; }
+
+                /* ───────── 透线 · 纯白 / 纯黑 ─────────
+                   无圆角、无阴影、无磨砂；按钮和卡片都是透明的，层级只靠 1px 细线。
+                   两个主题共用下面的规则，颜色全部来自 --acu-tl-* 变量。
+                   选择器统一带 :not(#acu-tl)：多出一个 id 的优先级，稳压各处的内联样式
+                   和设置弹窗自带的 <style>（它插在后面，同优先级会赢）。 */
+                .acu-theme-traceline-light {
+                    --acu-tl-line: rgba(0, 0, 0, 0.13); --acu-tl-line-soft: rgba(0, 0, 0, 0.07);
+                    --acu-tl-ink: #111111; --acu-tl-mute: #707070; --acu-tl-wash: rgba(0, 0, 0, 0.045);
+                    --acu-tl-solid: #ffffff; --acu-tl-solid-2: #f7f7f7; --acu-tl-scrim: rgba(0, 0, 0, 0.28);
+                    --acu-tl-off: rgba(0, 0, 0, 0.18);
+                }
+                .acu-theme-traceline {
+                    --acu-tl-line: rgba(255, 255, 255, 0.16); --acu-tl-line-soft: rgba(255, 255, 255, 0.08);
+                    --acu-tl-ink: #f2f2f2; --acu-tl-mute: #9a9a9a; --acu-tl-wash: rgba(255, 255, 255, 0.07);
+                    --acu-tl-solid: #000000; --acu-tl-solid-2: #0b0b0b; --acu-tl-scrim: rgba(0, 0, 0, 0.6);
+                    --acu-tl-off: rgba(255, 255, 255, 0.22);
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl),
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) *,
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) *::before,
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) *::after {
+                    border-radius: 0 !important;
+                }
+                /* 面：半透明底，去掉阴影和模糊 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-nav-container, .acu-data-display, .acu-option-panel, .acu-dash-ctrl-bar, .acu-dash-content-wrapper, .acu-opt-ctrl-bar, .acu-opt-content-wrapper, .acu-rep-ctrl-bar, .acu-rep-content-wrapper) {
+                    box-shadow: none !important;
+                    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+                    border-color: var(--acu-tl-line) !important;
+                }
+                /* 表格面板浮在仪表盘和正文上方，用实色底才看得清；其余区域保持半透明 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-display { background: var(--acu-tl-solid) !important; border: 1px solid var(--acu-tl-line) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-nav-container { background: var(--acu-bg-nav) !important; border: 1px solid var(--acu-tl-line) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-dash-ctrl-bar, .acu-opt-ctrl-bar, .acu-rep-ctrl-bar, .acu-dash-content-wrapper, .acu-opt-content-wrapper, .acu-rep-content-wrapper, .acu-option-panel) {
+                    background: var(--acu-bg-nav) !important;
+                }
+                /* 选项面板嵌在 wrapper 里时只让外层上色，两层半透明叠在一起会发暗 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-opt-content-wrapper, .acu-dash-content-wrapper, .acu-rep-content-wrapper) :is(.acu-option-panel, .acu-dash-container) { background: transparent !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-panel-header {
+                    background: transparent !important; border-bottom: 1px solid var(--acu-tl-line) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-panel-title, .acu-dash-ctrl-bar span, .acu-opt-ctrl-bar span, .acu-rep-ctrl-bar span) {
+                    color: var(--acu-tl-ink) !important; font-weight: 500 !important; letter-spacing: 0.04em;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-dash-ctrl-bar, .acu-opt-ctrl-bar, .acu-rep-ctrl-bar) i { color: var(--acu-tl-mute) !important; }
+
+                /* 按钮：透明、无框，悬停只铺一层极淡的底色；当前标签用下方一条短线标出 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-nav-btn, .acu-action-btn, .acu-header-btn, .acu-page-btn, .acu-tab-btn) {
+                    position: relative;
+                    background: transparent !important; border: 1px solid transparent !important;
+                    box-shadow: none !important; transform: none !important;
+                    color: var(--acu-tl-mute) !important; font-weight: 400 !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-nav-btn, .acu-action-btn, .acu-header-btn, .acu-page-btn, .acu-tab-btn):hover {
+                    background: var(--acu-tl-wash) !important; color: var(--acu-tl-ink) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-nav-btn, .acu-tab-btn, .acu-page-btn).active {
+                    background: transparent !important; color: var(--acu-tl-ink) !important; font-weight: 600 !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-nav-btn, .acu-tab-btn).active::after {
+                    content: ''; position: absolute; left: 50%; bottom: 2px; width: 22px; height: 1px;
+                    margin-left: -11px; background: var(--acu-tl-ink); pointer-events: none;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-page-btn.active { border-color: var(--acu-tl-ink) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-nav-btn i { opacity: 0.7; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-nav-separator,
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-nav-actions-area { border-color: var(--acu-tl-line-soft) !important; }
+                /* 排序模式的虚线提示要保留 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-nav-container.editing-order :is(.acu-nav-btn, .acu-action-btn) {
+                    border: 1px dashed var(--acu-tl-mute) !important;
+                }
+                /* 选项按钮：细线框，悬停加深 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-opt-btn {
+                    background: transparent !important; border: 1px solid var(--acu-tl-line) !important;
+                    box-shadow: none !important; transform: none !important; color: var(--acu-tl-ink) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-opt-btn:hover {
+                    background: var(--acu-tl-wash) !important; border-color: var(--acu-tl-ink) !important;
+                }
+
+                /* 卡片：透明，四边细线；卡片内部的分隔改成更淡的实线 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card {
+                    background: transparent !important; border: 1px solid var(--acu-tl-line) !important;
+                    box-shadow: none !important; transform: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card::before { display: none !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card:hover { border-color: var(--acu-tl-mute) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card.acu-card-selected { border-color: var(--acu-tl-ink) !important; outline: 1px solid var(--acu-tl-ink); outline-offset: -2px; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-card-header {
+                    background: transparent !important; border-bottom: 1px solid var(--acu-tl-line-soft) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-card-index { background: transparent !important; color: var(--acu-tl-mute) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-grid-item, .acu-full-item) {
+                    background: transparent !important; border: 1px solid var(--acu-tl-line-soft) !important; box-shadow: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-inline-item { border-bottom: 1px solid var(--acu-tl-line-soft) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-grid-item, .acu-full-item, .acu-inline-item):hover { background: var(--acu-tl-wash) !important; }
+
+                /* 仪表盘：卡槽之间只留细线，标题小一号、灰色 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-dash-container, .acu-dash-col) { background: transparent !important; box-shadow: none !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-dash-card {
+                    background: transparent !important; box-shadow: none !important; border: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-dash-title {
+                    background: transparent !important; border: none !important; color: var(--acu-tl-mute) !important;
+                    font-weight: 500 !important; letter-spacing: 0.08em; justify-content: flex-start !important; text-align: left !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-dash-stat-row, .acu-dash-npc-item, .acu-dash-list-item) {
+                    background: transparent !important; border: none !important; border-bottom: 1px solid var(--acu-tl-line-soft) !important; box-shadow: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-dash-stat-label { color: var(--acu-tl-mute) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-dash-npc-item:hover { background: var(--acu-tl-wash) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-tab-header { background: transparent !important; border-color: var(--acu-tl-line) !important; justify-content: flex-start !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-tab-btn:only-child {
+                    color: var(--acu-tl-mute) !important; font-weight: 500 !important; letter-spacing: 0.08em; padding-left: 0 !important; cursor: default;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-tab-btn:only-child::after { display: none !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-tab-btn:only-child:hover { background: transparent !important; }
+
+                /* 弹窗、单元格菜单、快速查看：实色底（压在正文上必须看得清），细线框 */
+                .acu-edit-overlay:not(.acu-transparent-mode) > .acu-edit-dialog:is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl),
+                .acu-quick-view-card:is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl),
+                .acu-cell-menu:is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) {
+                    --acu-bg-panel: var(--acu-tl-solid); --acu-card-bg: var(--acu-tl-solid); --acu-table-head: var(--acu-tl-solid-2);
+                    background: var(--acu-tl-solid) !important; color: var(--acu-tl-ink) !important;
+                    border: 1px solid var(--acu-tl-line) !important; box-shadow: none !important;
+                    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+                }
+                .acu-edit-overlay:has(> :is(.acu-theme-traceline, .acu-theme-traceline-light)):not(.acu-transparent-mode),
+                .acu-quick-view-overlay:has(> :is(.acu-theme-traceline, .acu-theme-traceline-light)) {
+                    background: var(--acu-tl-scrim, rgba(0, 0, 0, 0.4)) !important;
+                    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+                }
+                .acu-edit-overlay:has(> .acu-theme-traceline-light):not(.acu-transparent-mode),
+                .acu-quick-view-overlay:has(> .acu-theme-traceline-light) { background: rgba(0, 0, 0, 0.28) !important; }
+                .acu-edit-overlay:has(> .acu-theme-traceline):not(.acu-transparent-mode),
+                .acu-quick-view-overlay:has(> .acu-theme-traceline) { background: rgba(0, 0, 0, 0.6) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-edit-header, .acu-quick-view-header) {
+                    background: transparent !important; border-bottom: 1px solid var(--acu-tl-line) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-cell-menu-item:hover { background: var(--acu-tl-wash) !important; }
+                /* 设置页 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-section-header {
+                    background: transparent !important; border: none !important; border-bottom: 1px solid var(--acu-tl-line) !important;
+                    box-shadow: none !important; transform: none !important; margin-bottom: 0 !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-section-header:hover { background: var(--acu-tl-wash) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-section-title { font-weight: 500 !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-section-title i { color: var(--acu-tl-mute) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-section-content, .acu-settings-group) {
+                    background: transparent !important; border: none !important; border-bottom: 1px solid var(--acu-tl-line) !important; box-shadow: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-control-row { border-bottom: 1px solid var(--acu-tl-line-soft) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-btn-block {
+                    background: transparent !important; border: 1px solid var(--acu-tl-line) !important; box-shadow: none !important; color: var(--acu-tl-ink) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-btn-block:hover { background: var(--acu-tl-wash) !important; border-color: var(--acu-tl-ink) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-close-pill {
+                    background: transparent !important; color: var(--acu-tl-ink) !important;
+                    border: 1px solid var(--acu-tl-ink) !important; box-shadow: none !important; transform: none !important; font-weight: 500 !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-close-pill:hover { background: var(--acu-tl-ink) !important; color: var(--acu-tl-solid) !important; filter: none !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]), textarea, select, .acu-nice-select, .acu-stepper) {
+                    background-color: transparent !important; border: 1px solid var(--acu-tl-line) !important;
+                    box-shadow: none !important; color: var(--acu-tl-ink) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(input, textarea, select):focus { border-color: var(--acu-tl-ink) !important; outline: none !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) select option { background: var(--acu-tl-solid); color: var(--acu-tl-ink); }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-step-val { border-color: var(--acu-tl-line) !important; }
+                /* 开关：方形细线，开启时实心 */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-slider-switch, .acu-switch-slider) {
+                    background: transparent !important; border: 1px solid var(--acu-tl-off) !important; box-shadow: none !important; filter: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-slider-switch, .acu-switch-slider)::before {
+                    background: var(--acu-tl-off) !important; box-shadow: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) input:checked + :is(.acu-slider-switch, .acu-switch-slider) {
+                    background: var(--acu-tl-ink) !important; border-color: var(--acu-tl-ink) !important; box-shadow: none !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) input:checked + :is(.acu-slider-switch, .acu-switch-slider)::before {
+                    background: var(--acu-tl-solid) !important;
+                }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-color-circle, .acu-custom-color-btn).selected { box-shadow: none !important; outline: 1px solid var(--acu-tl-ink); outline-offset: 2px; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(button, input, select, textarea):focus-visible { outline: 1px solid var(--acu-tl-ink) !important; outline-offset: 2px; }
             </style>
         `;
         $('head').append(styles);
