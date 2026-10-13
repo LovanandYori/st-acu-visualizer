@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.8'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.9'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -1702,12 +1702,14 @@
                     --acu-tl-line: rgba(0, 0, 0, 0.13); --acu-tl-line-soft: rgba(0, 0, 0, 0.07);
                     --acu-tl-ink: #111111; --acu-tl-mute: #707070; --acu-tl-wash: rgba(0, 0, 0, 0.045);
                     --acu-tl-solid: #ffffff; --acu-tl-solid-2: #f7f7f7; --acu-tl-scrim: rgba(0, 0, 0, 0.28);
+                    --acu-tl-sheet: rgba(255, 255, 255, 0.86);
                     --acu-tl-off: rgba(0, 0, 0, 0.18);
                 }
                 .acu-theme-traceline {
                     --acu-tl-line: rgba(255, 255, 255, 0.16); --acu-tl-line-soft: rgba(255, 255, 255, 0.08);
                     --acu-tl-ink: #f2f2f2; --acu-tl-mute: #9a9a9a; --acu-tl-wash: rgba(255, 255, 255, 0.07);
                     --acu-tl-solid: #000000; --acu-tl-solid-2: #0b0b0b; --acu-tl-scrim: rgba(0, 0, 0, 0.6);
+                    --acu-tl-sheet: rgba(0, 0, 0, 0.78);
                     --acu-tl-off: rgba(255, 255, 255, 0.22);
                 }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl),
@@ -1722,8 +1724,12 @@
                     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
                     border-color: var(--acu-tl-line) !important;
                 }
-                /* 表格面板浮在仪表盘和正文上方，用实色底才看得清；其余区域保持半透明 */
-                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-display { background: var(--acu-tl-solid) !important; border: 1px solid var(--acu-tl-line) !important; }
+                /* 表格面板浮在仪表盘和正文上方：比导航栏更实一些（--acu-tl-sheet），但仍半透明（用户要求淡一点） */
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-display {
+                    background: var(--acu-tl-sheet) !important; border: 1px solid var(--acu-tl-line) !important;
+                    /* 半透明后背后的正文/仪表盘文字会和卡片叠在一起，加一点轻模糊只为让它们别抢字 */
+                    backdrop-filter: blur(6px) !important; -webkit-backdrop-filter: blur(6px) !important;
+                }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-nav-container { background: var(--acu-bg-nav) !important; border: 1px solid var(--acu-tl-line) !important; }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-dash-ctrl-bar, .acu-opt-ctrl-bar, .acu-rep-ctrl-bar, .acu-dash-content-wrapper, .acu-opt-content-wrapper, .acu-rep-content-wrapper, .acu-option-panel) {
                     background: var(--acu-bg-nav) !important;
@@ -1774,14 +1780,14 @@
 
                 /* 卡片：透明，四边细线；卡片内部的分隔改成更淡的实线 */
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card {
-                    background: transparent !important; border: 1px solid var(--acu-tl-line) !important;
+                    background: transparent !important; border: none !important; border-bottom: 1px solid var(--acu-tl-line) !important;
                     box-shadow: none !important; transform: none !important;
                 }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card::before { display: none !important; }
-                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card:hover { border-color: var(--acu-tl-mute) !important; }
+                :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card:hover { border-bottom-color: var(--acu-tl-mute) !important; }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-data-card.acu-card-selected { border-color: var(--acu-tl-ink) !important; outline: 1px solid var(--acu-tl-ink); outline-offset: -2px; }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-card-header {
-                    background: transparent !important; border-bottom: 1px solid var(--acu-tl-line-soft) !important;
+                    background: transparent !important; border-bottom: none !important;
                 }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-card-index { background: transparent !important; color: var(--acu-tl-mute) !important; }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-grid-item, .acu-full-item) {
@@ -1811,14 +1817,14 @@
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-tab-btn:only-child::after { display: none !important; }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) .acu-tab-btn:only-child:hover { background: transparent !important; }
 
-                /* 弹窗、单元格菜单、快速查看：实色底（压在正文上必须看得清），细线框 */
+                /* 弹窗、单元格菜单、快速查看：与表格面板同一层半透明底（弹窗背后有遮罩压暗，不会花），细线框 */
                 .acu-edit-overlay:not(.acu-transparent-mode) > .acu-edit-dialog:is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl),
                 .acu-quick-view-card:is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl),
                 .acu-cell-menu:is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) {
-                    --acu-bg-panel: var(--acu-tl-solid); --acu-card-bg: var(--acu-tl-solid); --acu-table-head: var(--acu-tl-solid-2);
-                    background: var(--acu-tl-solid) !important; color: var(--acu-tl-ink) !important;
+                    --acu-bg-panel: var(--acu-tl-sheet); --acu-card-bg: transparent; --acu-table-head: transparent;
+                    background: var(--acu-tl-sheet) !important; color: var(--acu-tl-ink) !important;
                     border: 1px solid var(--acu-tl-line) !important; box-shadow: none !important;
-                    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+                    backdrop-filter: blur(6px) !important; -webkit-backdrop-filter: blur(6px) !important;
                 }
                 .acu-edit-overlay:has(> :is(.acu-theme-traceline, .acu-theme-traceline-light)):not(.acu-transparent-mode),
                 .acu-quick-view-overlay:has(> :is(.acu-theme-traceline, .acu-theme-traceline-light)) {
@@ -4389,14 +4395,20 @@ ${allTableNames.map(tName => {
         // 不等长，视觉上反而显得不居中；全宽铺满底部才是平衡的。
         // 嵌入的仪表盘/选项仍是附属块，对齐正文列并两侧内缩做出层次。
         // 先全部量完再全部写，避免写-读交错触发强制重排（见 planPanelAlignment 注释）
-        // 透线主题：嵌入块不内缩、与底部栏（#chat 内容宽）齐宽，整列只有一条笔直的边（用户要求）。
-        // 取不到 #chat 时退回正文列对齐。
+        // 透线主题：嵌入块取「正文列内缩」与「底部栏（#chat 内容宽）」两者的中间宽度——
+        // 用户实测：正文列太窄、与底部栏齐宽又太长。取不到 #chat 时退回正文列对齐。
         let embedColumn = column, embedInset = inset;
         if (TRACELINE_THEMES.includes(getConfig().theme)) {
             const chatEl = $('#chat')[0];
             if (chatEl) {
                 const chatBox = column.contentBox(chatEl);
-                if (chatBox.width > 0) { embedColumn = { box: chatBox, contentBox: column.contentBox }; embedInset = 0; }
+                const pad = Math.max(0, Math.min(inset, Math.floor((column.box.width - 240) / 2)));
+                const narrowL = column.box.left + pad, narrowR = column.box.left + column.box.width - pad;
+                const left = (narrowL + chatBox.left) / 2, right = (narrowR + chatBox.left + chatBox.width) / 2;
+                if (chatBox.width > 0 && right - left > 0) {
+                    embedColumn = { box: { left, width: right - left }, contentBox: column.contentBox };
+                    embedInset = 0;
+                }
             }
         }
         const plans = [
