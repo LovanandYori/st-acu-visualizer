@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.7'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.8'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -308,6 +308,8 @@
     // 毛玻璃类主题：overlay 需要拿到主题类才能套上「轻压暗 + 模糊」那组规则
     // （普通主题的 overlay 用纯色压暗，不需要）。新增磨砂主题时加进这个表即可。
     const GLASS_THEMES = ['apple', 'blushglass', 'lavender'];
+    // 透线主题：嵌入式仪表盘/选项/替换正文框与底部栏齐宽（见 alignWrapperToMessageColumnNow）
+    const TRACELINE_THEMES = ['traceline', 'traceline-light'];
     const overlayThemeClass = (theme) =>
         GLASS_THEMES.includes(theme) ? ` acu-theme-${theme}` : '';
 
@@ -424,8 +426,8 @@
         lavender: { bgNav: '#F2EBF7', bgPanel: '#F5EFFA', border: '#E1D6EA', textMain: '#2E163D', textSub: '#746084', uiColor: '#C7A3FF', btnBg: '#FBF8FF', btnHover: '#F2EBF7', btnActiveBg: '#C7A3FF', btnActiveText: '#2E163D', tableHead: '#F2EBF7', tableHover: 'rgba(198, 160, 255, 0.10)', shadow: 'rgba(68, 39, 96, 0.10)', cardBg: '#FBF8FF', badgeBg: 'rgba(199, 163, 255, 0.14)', menuBg: '#FBF8FF', menuText: '#2E163D', inputBg: 'rgba(255, 255, 255, 0.7)', overlayBg: 'rgba(68, 39, 96, 0.2)' },
         // 透线 · 纯白 / 纯黑：半透明纯白（纯黑）底，按钮与卡片透明，层级只靠 1px 细线和字重区分。
         // shadow 给 transparent：消费方都是 `box-shadow: 0 4px 15px var(--acu-shadow)`，透明即无阴影。
-        'traceline-light': { bgNav: 'rgba(255, 255, 255, 0.80)', bgPanel: 'rgba(255, 255, 255, 0.95)', border: 'rgba(0, 0, 0, 0.13)', textMain: '#111111', textSub: '#707070', uiColor: '#111111', btnBg: 'transparent', btnHover: 'rgba(0, 0, 0, 0.05)', btnActiveBg: '#111111', btnActiveText: '#ffffff', tableHead: 'transparent', tableHover: 'rgba(0, 0, 0, 0.04)', shadow: 'transparent', cardBg: 'transparent', badgeBg: 'rgba(0, 0, 0, 0.05)', menuBg: '#ffffff', menuText: '#111111', inputBg: 'rgba(0, 0, 0, 0.03)', overlayBg: 'rgba(0, 0, 0, 0.28)' },
-        traceline: { bgNav: 'rgba(0, 0, 0, 0.66)', bgPanel: 'rgba(0, 0, 0, 0.90)', border: 'rgba(255, 255, 255, 0.16)', textMain: '#f2f2f2', textSub: '#9a9a9a', uiColor: '#f2f2f2', btnBg: 'transparent', btnHover: 'rgba(255, 255, 255, 0.07)', btnActiveBg: '#f2f2f2', btnActiveText: '#000000', tableHead: 'transparent', tableHover: 'rgba(255, 255, 255, 0.05)', shadow: 'transparent', cardBg: 'transparent', badgeBg: 'rgba(255, 255, 255, 0.08)', menuBg: '#000000', menuText: '#f2f2f2', inputBg: 'rgba(255, 255, 255, 0.06)', overlayBg: 'rgba(0, 0, 0, 0.6)' },
+        'traceline-light': { bgNav: 'rgba(255, 255, 255, 0.62)', bgPanel: 'rgba(255, 255, 255, 0.95)', border: 'rgba(0, 0, 0, 0.13)', textMain: '#111111', textSub: '#707070', uiColor: '#111111', btnBg: 'transparent', btnHover: 'rgba(0, 0, 0, 0.05)', btnActiveBg: '#111111', btnActiveText: '#ffffff', tableHead: 'transparent', tableHover: 'rgba(0, 0, 0, 0.04)', shadow: 'transparent', cardBg: 'transparent', badgeBg: 'rgba(0, 0, 0, 0.05)', menuBg: '#ffffff', menuText: '#111111', inputBg: 'rgba(0, 0, 0, 0.03)', overlayBg: 'rgba(0, 0, 0, 0.28)' },
+        traceline: { bgNav: 'rgba(0, 0, 0, 0.48)', bgPanel: 'rgba(0, 0, 0, 0.90)', border: 'rgba(255, 255, 255, 0.16)', textMain: '#f2f2f2', textSub: '#9a9a9a', uiColor: '#f2f2f2', btnBg: 'transparent', btnHover: 'rgba(255, 255, 255, 0.07)', btnActiveBg: '#f2f2f2', btnActiveText: '#000000', tableHead: 'transparent', tableHover: 'rgba(255, 255, 255, 0.05)', shadow: 'transparent', cardBg: 'transparent', badgeBg: 'rgba(255, 255, 255, 0.08)', menuBg: '#000000', menuText: '#f2f2f2', inputBg: 'rgba(255, 255, 255, 0.06)', overlayBg: 'rgba(0, 0, 0, 0.6)' },
     };
 
     
@@ -4387,11 +4389,21 @@ ${allTableNames.map(tName => {
         // 不等长，视觉上反而显得不居中；全宽铺满底部才是平衡的。
         // 嵌入的仪表盘/选项仍是附属块，对齐正文列并两侧内缩做出层次。
         // 先全部量完再全部写，避免写-读交错触发强制重排（见 planPanelAlignment 注释）
+        // 透线主题：嵌入块不内缩、与底部栏（#chat 内容宽）齐宽，整列只有一条笔直的边（用户要求）。
+        // 取不到 #chat 时退回正文列对齐。
+        let embedColumn = column, embedInset = inset;
+        if (TRACELINE_THEMES.includes(getConfig().theme)) {
+            const chatEl = $('#chat')[0];
+            if (chatEl) {
+                const chatBox = column.contentBox(chatEl);
+                if (chatBox.width > 0) { embedColumn = { box: chatBox, contentBox: column.contentBox }; embedInset = 0; }
+            }
+        }
         const plans = [
-            planPanelAlignment($('.acu-embedded-dashboard-container'), column, inset),
-            planPanelAlignment($('.acu-embedded-options-container'), column, inset),
+            planPanelAlignment($('.acu-embedded-dashboard-container'), embedColumn, embedInset),
+            planPanelAlignment($('.acu-embedded-options-container'), embedColumn, embedInset),
             // 被替换正文框：与仪表盘/选项同款附属块，同列同 inset（漏了它会 width:100% 右溢）
-            planPanelAlignment($('.acu-embedded-replaced-container'), column, inset),
+            planPanelAlignment($('.acu-embedded-replaced-container'), embedColumn, embedInset),
             // 滚动模式主面板（acu-tt-scroll）：挂末楼 mes_block 内，与嵌入式仪表盘/选项同挂点，
             // 用同一测量对齐机制（setProperty important），inset 减 6px = 比仪表盘略长且可感知。
             // 固定模式 wrapper 挂 #form_sheld 前不参与正文列对齐（保持全宽），本选择器不命中。
