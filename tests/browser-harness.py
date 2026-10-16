@@ -246,4 +246,36 @@ with sync_playwright() as p:
     check('T0 no page errors (chat-switch run)', not errs, '; '.join(errs)[:200])
     b.close()
 
+    # T15: no jQuery click/input handler on any ancestor of ST's message edit controls.
+    # 泉此方悬浮窗 7.5+ audits these ancestors and blocks native editing if a foreign one exists
+    # (V17.7.9 had click.acu_autoclose on body). The outside-click auto-close must still work.
+    b, pg, errs = boot(p, {'showDashboard': False})
+    open_tab(pg, '背包')
+    foreign = pg.evaluate("""() => {
+        const mes = document.querySelector('#chat .mes[mesid="1"] .mes_block');
+        mes.insertAdjacentHTML('afterbegin', '<div class="mes_buttons"><div class="mes_edit"></div></div><textarea id="curEditTextarea" class="edit_textarea"></textarea>');
+        const out = [];
+        for (const sel of ['.mes_edit', '#curEditTextarea']) {
+          const target = document.querySelector(sel);
+          for (let n = target; n && n !== document; n = n.parentNode) {
+            for (const type of ['click', 'input']) {
+              const list = jQuery._data(n, 'events')?.[type] || [];
+              list.forEach((h, i) => {
+                const direct = i >= (list.delegateCount || 0);
+                let hit = direct;
+                for (let el = target; !hit && el && el !== n; el = el.parentNode) if (el.nodeType === 1 && el.matches(h.selector)) hit = true;
+                if (hit) out.push(`${sel}<-${n.id || n.className || n.nodeName}:${type}.${h.namespace}`);
+              });
+            }
+          }
+        }
+        return out; }""")
+    vis = "() => !!document.querySelector('#acu-data-area.visible')"
+    was_open = pg.evaluate(vis)
+    pg.evaluate("() => document.querySelector('#chat .mes[mesid=\"0\"] .mes_text').click()"); pg.wait_for_timeout(300)
+    check('T15 no foreign jQuery handler above edit controls; outside click still closes panel',
+          not foreign and was_open and not pg.evaluate(vis), f'foreign={foreign} open={was_open}')
+    check('T0 no page errors (edit-guard run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
 print(f'\n{sum(results)}/{len(results)} passed')

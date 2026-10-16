@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.9'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.7.10'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -135,6 +135,9 @@
     // MESSAGE_UPDATED → 被替换正文框轻量重检的防抖句柄
     let repBoxDebounce = null;
     let isEditingOrder = false;
+    // 「点面板外自动收起」的原生监听（见 bindEvents），重绑前先移除旧的
+    let autoCloseListener = null;
+    let autoCloseListenerDoc = null;
     let currentDiffMap = new Set();
     let observer = null;
     let columnResizeObserver = null;
@@ -4899,7 +4902,15 @@ const checkRowChanged = (realIdx, row) => {
             e.stopPropagation();
         });
         
-        $('body').off('click.acu_autoclose').on('click.acu_autoclose', function(e) {
+        // 点面板外自动收起：用原生监听挂在 document 的冒泡阶段，不用 jQuery 绑在 body 上。
+        // 泉此方悬浮窗 7.5+ 的「原生编辑保护」会检查消息编辑按钮（小铅笔）所有上层元素上的
+        // jQuery click 处理器，body 上多一个就判定「无法确认宿主处理器」并拦截编辑。
+        // document 冒泡阶段的触发时机与原来 body 上一致：内部 stopPropagation 的点击同样到不了这里。
+        $('body').off('click.acu_autoclose');
+        const autoCloseDoc = (($('body')[0] || document.body || {}).ownerDocument) || document;
+        if (autoCloseListener && autoCloseListenerDoc) autoCloseListenerDoc.removeEventListener('click', autoCloseListener);
+        autoCloseListenerDoc = autoCloseDoc;
+        autoCloseListener = function(e) {
             if (isEditingOrder) return;
             
             if (!$('#acu-data-area').hasClass('visible')) return;
@@ -4918,7 +4929,8 @@ const checkRowChanged = (realIdx, row) => {
             if ($target.is('input, textarea') || $target.prop('isContentEditable')) return;
 
             closePanel();
-        });
+        };
+        autoCloseDoc.addEventListener('click', autoCloseListener);
 
         const switchTab = (tableName) => {
             isMultiSelectMode = false;
