@@ -174,7 +174,7 @@ section('[V-4] 楼层重新挂载后补挂嵌入块');
     };
     const f = run(
       [fwd('getConfig'), fwd('injectReplacedContentBox'), fwd('getEmbeddedTargetBlock'), fwd('renderInterface'),
-        fwd('shouldShowOptions'), `let embedWanted = ${JSON.stringify(wanted)};`, 'let lastEmbedReattachTarget = null;',
+        fwd('shouldShowOptions'), 'const isFloatMode = () => false;', `let embedWanted = ${JSON.stringify(wanted)};`, 'let lastEmbedReattachTarget = null;',
         `let lastOptionDataCheck = ${JSON.stringify(optionData)};`, decl.reattach],
       'reattachEmbedsAfterRemount', deps);
     return { f, calls, deps };

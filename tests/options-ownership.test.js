@@ -64,6 +64,8 @@ function makeWorld({ chat = [], noChat = false } = {}) {
     'const $ = (...a) => __deps.getCore().$(...a);',
     "let lastOptionDataCheck = '';", 'let optionsOwnerFloorKey = null;',
     'let hostGenerating = false;', 'let optionsSendSuppressedKey = null;',
+    // 悬浮球形态（V17.8.1）另有分支，这里测的是默认形态
+    'const isFloatMode = () => false;',
     decl.latestKey, decl.note, decl.show, decl.sync, decl.suppress, decl.floorEvents,
   ], `{
     latestKey: getLatestFloorKey, note: noteOptionDataChange, shouldShow: shouldShowOptions,
