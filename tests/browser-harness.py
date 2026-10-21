@@ -71,7 +71,7 @@ def check(name, ok, detail=''):
     results.append(ok)
     print(('PASS ' if ok else 'FAIL ') + name + (f'  [{detail}]' if detail else ''))
 
-def boot(p, config=None, pre=None, post_mock=None, before_mock=None, viewport=None):
+def boot(p, config=None, pre=None, post_mock=None, before_mock=None, viewport=None, wait_state='visible'):
     b = p.chromium.launch()
     pg = b.new_page(viewport=viewport or {'width': 1200, 'height': 900})
     errors = []
@@ -86,7 +86,7 @@ def boot(p, config=None, pre=None, post_mock=None, before_mock=None, viewport=No
     if post_mock: pg.add_script_tag(content=post_mock)
     if pre: pg.evaluate(pre)
     pg.add_script_tag(content=SCRIPT)
-    pg.wait_for_selector('.acu-nav-btn', timeout=5000)
+    pg.wait_for_selector('.acu-nav-btn', timeout=5000, state=wait_state)
     pg.wait_for_timeout(300)
     return b, pg, errors
 
@@ -277,5 +277,48 @@ with sync_playwright() as p:
           not foreign and was_open and not pg.evaluate(vis), f'foreign={foreign} open={was_open}')
     check('T0 no page errors (edit-guard run)', not errs, '; '.join(errs)[:200])
     b.close()
+
+    # T16: floating-ball mode (V17.8.1). The panel lives on body behind a draggable ball:
+    # tap opens/closes, outside click closes but keeps the open table, drag snaps to an edge
+    # and is remembered, switching the setting off puts the panel back into #chat.
+    ball_box = "() => { const r = document.getElementById('acu-float-ball')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2, left: r.left, top: r.top, w: r.width } : null; }"
+    shown = "() => { const w = document.querySelector('.acu-wrapper'); return !!w && getComputedStyle(w).display !== 'none'; }"
+    for vp, label in (({'width': 1200, 'height': 900}, 'desktop'), ({'width': 390, 'height': 844}, 'phone')):
+        b, pg, errs = boot(p, {'showDashboard': False, 'floatBall': True}, viewport=vp, wait_state='attached')
+        bb = pg.evaluate(ball_box)
+        place = pg.evaluate("() => ({ parent: document.querySelector('.acu-wrapper')?.parentNode === document.body, inChat: !!document.querySelector('#chat .acu-wrapper') })")
+        check(f'T16 [{label}] ball shown, panel on body and hidden until tapped',
+              bool(bb) and 0 <= bb['left'] <= vp['width'] - bb['w'] and place['parent'] and not place['inChat'] and not pg.evaluate(shown),
+              f'ball={bb} place={place}')
+        pg.mouse.click(bb['x'], bb['y']); pg.wait_for_timeout(250)
+        opened = pg.evaluate(shown)
+        open_tab(pg, '背包')
+        geo = pg.evaluate("""() => { const w = document.querySelector('.acu-wrapper').getBoundingClientRect(); const d = document.querySelector('#acu-data-area.visible')?.getBoundingClientRect();
+            return { wl: w.left, wr: w.right, dTop: d ? d.top : null, cards: document.querySelectorAll('#acu-data-area .acu-data-card').length }; }""")
+        check(f'T16 [{label}] tap opens; table panel fits on screen',
+              opened and geo['dTop'] is not None and geo['dTop'] >= 0 and geo['wl'] >= 0 and geo['wr'] <= vp['width'] and geo['cards'] == 3, json.dumps(geo))
+        pg.evaluate("() => document.querySelector('#chat .mes[mesid=\"0\"] .mes_text').click()"); pg.wait_for_timeout(250)
+        closed = not pg.evaluate(shown)
+        pg.mouse.click(bb['x'], bb['y']); pg.wait_for_timeout(250)
+        restored = pg.evaluate(shown) and pg.evaluate("() => !!document.querySelector('#acu-data-area.visible .acu-data-card')")
+        pg.mouse.click(bb['x'], bb['y']); pg.wait_for_timeout(250)
+        check(f'T16 [{label}] outside click closes; reopening restores the table; tapping again closes',
+              closed and restored and not pg.evaluate(shown), f'closed={closed} restored={restored}')
+        pg.mouse.move(bb['x'], bb['y']); pg.mouse.down(); pg.mouse.move(bb['x'] - 120, bb['y'] + 40, steps=6); pg.mouse.move(40, 300, steps=6); pg.mouse.up(); pg.wait_for_timeout(350)
+        nb = pg.evaluate(ball_box)
+        saved = pg.evaluate("() => JSON.parse(localStorage.getItem('acu_float_ball_pos') || 'null')")
+        check(f'T16 [{label}] drag snaps to the left edge, is remembered, and does not toggle',
+              nb and abs(nb['left'] - 8) < 1 and saved and saved.get('side') == 'left' and not pg.evaluate(shown), f'ball={nb} saved={saved}')
+        if label == 'desktop':
+            pg.mouse.click(nb['x'], nb['y']); pg.wait_for_timeout(250)
+            pg.evaluate("() => document.querySelector('#acu-btn-settings').click()"); pg.wait_for_timeout(300)
+            pg.evaluate("() => document.querySelector('[data-target=\"sec-layout\"]').click()"); pg.wait_for_timeout(300)
+            pg.evaluate("() => document.querySelector('#cfg-float-ball').click()"); pg.wait_for_timeout(300)
+            pg.evaluate("() => document.querySelector('#dlg-close').click()"); pg.wait_for_timeout(300)
+            back = pg.evaluate("() => ({ ball: !!document.getElementById('acu-float-ball'), inChat: !!document.querySelector('#chat > .acu-wrapper'), cfg: JSON.parse(localStorage.getItem('acu_ui_config_v18')).floatBall })")
+            check('T16 switching the setting off removes the ball and puts the panel back into #chat',
+                  not back['ball'] and back['inChat'] and back['cfg'] is False and pg.evaluate(shown), json.dumps(back))
+        check(f'T0 no page errors (float-ball {label} run)', not errs, '; '.join(errs)[:200])
+        b.close()
 
 print(f'\n{sum(results)}/{len(results)} passed')

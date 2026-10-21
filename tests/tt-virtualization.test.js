@@ -231,9 +231,10 @@ section('[V-5] handleChatMutation：只在楼层变动时干活');
       reattachEmbedsAfterRemount: () => { calls.reattach++; return reattachRenders; },
       alignWrapperToMessageColumnNow: () => { calls.align++; },
       requestAnimationFrame: (cb) => cb(),
+      isFloatMode: (c) => !!(c && c.floatBall === true),
     };
     const h = run(
-      [fwd('getConfig'), fwd('renderInterface'), fwd('detectTTBounded'), fwd('reattachEmbedsAfterRemount'),
+      [fwd('getConfig'), fwd('renderInterface'), fwd('detectTTBounded'), fwd('reattachEmbedsAfterRemount'), fwd('isFloatMode'),
         fwd('alignWrapperToMessageColumnNow'), fwd('requestAnimationFrame'), 'const $ = __deps.$;',
         'let chatObsRafPending = false;', decl.touches, decl.adds,
         'let chatMutationTouchedMes = false;', 'let chatMutationAddedMes = false;', decl.handle],

@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.7.10'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.8.1'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -13,6 +13,8 @@
     const STORAGE_KEY_REVERSE_TABLES = 'acu_reverse_tables';
     const STORAGE_KEY_HIDDEN_TABLES = 'acu_hidden_tables';
     const STORAGE_KEY_TABLE_STYLES = 'acu_table_styles';
+    // 悬浮球位置（V17.8.1 新增）：{ side: 'left'|'right', y: 0~1 视口高度比例 }
+    const STORAGE_KEY_FLOAT_BALL_POS = 'acu_float_ball_pos';
 
     // HTML 转义工具(网络安全审查 deepseek-v4-pro):DB 表数据(表名/列名/单元格=角色卡/AI填表内容)
     // 模板插值原样拼 HTML 是存储型 XSS 面,统一转义 & < > " ' 五字符。
@@ -275,6 +277,9 @@
         collapseStyle: 'bar',
         collapsePosition: 'center',
         frontendPosition: 'bottom',
+        // 悬浮球模式（默认关闭）：前端收进一个可拖动的小球，点一下才弹出导航栏和表格面板。
+        // 开启时「前端位置」「收起样式」以及 TT 的「面板位置」都不生效；嵌入式仪表盘/选项不受影响。
+        floatBall: false,
         dashboardPosition: 'embedded',
         dbTransparentMap: {},
         dbAppleGlass: false,
@@ -891,6 +896,9 @@
              $embDash.addClass(`acu-theme-${config.theme}`);
              $embDash.css(cssProps);
         }
+
+        const ball = document.getElementById('acu-float-ball');
+        if (ball) ball.className = `acu-float-ball acu-theme-${config.theme}${floatOpen ? ' active' : ''}`;
 
         injectDatabaseStyles(config);
     };
@@ -1885,6 +1893,34 @@
                 }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(.acu-color-circle, .acu-custom-color-btn).selected { box-shadow: none !important; outline: 1px solid var(--acu-tl-ink); outline-offset: 2px; }
                 :is(.acu-theme-traceline, .acu-theme-traceline-light):not(#acu-tl) :is(button, input, select, textarea):focus-visible { outline: 1px solid var(--acu-tl-ink) !important; outline-offset: 2px; }
+
+                /* ───────── 悬浮球模式（V17.8.1）─────────
+                   主面板挂到 body 上、position:fixed，平时只显示一个可拖动的小球；点球弹出导航栏，
+                   表格面板照旧从导航栏上方弹出。位置/宽度/面板最大高度由 positionFloatWindow 写进
+                   --acu-float-* 变量（跟着 #sheld 的左右边、输入框的上沿走）。
+                   写在透线规则之后：透线那条「本元素及子元素全部 border-radius:0」会把球压成方块，
+                   这里用同等优先级、靠后的规则把球保持为圆形。 */
+                .acu-wrapper.acu-float-mode {
+                    position: fixed !important; margin: 0 !important; display: none;
+                    left: var(--acu-float-left, 8px); width: var(--acu-float-width, calc(100vw - 16px));
+                    bottom: var(--acu-float-bottom, 12px); top: auto; z-index: 20000; box-sizing: border-box;
+                }
+                .acu-wrapper.acu-float-mode.acu-float-open { display: flex; animation: acuFloatIn 0.18s ease-out; }
+                @keyframes acuFloatIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+                .acu-wrapper.acu-float-mode .acu-data-display { max-height: var(--acu-float-panel-max, 70vh) !important; }
+                #acu-float-ball.acu-float-ball {
+                    position: fixed; z-index: 20005; width: 46px; height: 46px; box-sizing: border-box;
+                    border-radius: 50% !important; display: flex; align-items: center; justify-content: center;
+                    background: var(--acu-bg-nav); border: 1px solid var(--acu-border); color: var(--acu-ui-color);
+                    box-shadow: 0 4px 14px var(--acu-shadow); font-size: 18px; cursor: pointer;
+                    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+                    opacity: 0.82; transition: opacity 0.2s, transform 0.15s, left 0.2s ease, top 0.2s ease, background 0.2s, color 0.2s;
+                    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+                }
+                #acu-float-ball.acu-float-ball:hover { opacity: 1; }
+                #acu-float-ball.acu-float-ball.dragging { transition: none; opacity: 1; transform: scale(1.08); }
+                /* 展开时球仍在最上层：随时点它都能收起（压住面板边缘一角，面板可滚动，不影响查看） */
+                #acu-float-ball.acu-float-ball.active { opacity: 1; background: var(--acu-btn-active-bg); color: var(--acu-btn-active-text); border-color: transparent; }
             </style>
         `;
         $('head').append(styles);
@@ -2759,6 +2795,14 @@
                                     </select>
                                 </div>
                             </div><div class="acu-control-row">
+                                <div class="acu-label-col"><span class="acu-label-main">悬浮球模式</span><span class="acu-label-sub" style="font-weight:normal">收进可拖动的小球，点一下展开；开启后「前端位置」「收起样式」不生效</span></div>
+                                <div class="acu-input-col">
+                                    <label class="acu-switch">
+                                        <input type="checkbox" id="cfg-float-ball" ${config.floatBall ? 'checked' : ''}>
+                                        <span class="acu-slider-switch"></span>
+                                    </label>
+                                </div>
+                            </div><div class="acu-control-row">
                                 <div class="acu-label-col"><span class="acu-label-main">底部按钮列数</span></div>
                                  <div class="acu-input-col">
                                      <select id="cfg-grid-cols" class="acu-nice-select">
@@ -2948,6 +2992,14 @@ ${allTableNames.map(tName => {
         });
         dialog.find('#cfg-layout').on('change', function() { saveConfig({ layout: $(this).val() }); renderInterface(false); });
         dialog.find('#cfg-frontend-pos').on('change', function() { saveConfig({ frontendPosition: $(this).val() }); renderInterface(false); });
+        dialog.find('#cfg-float-ball').on('change', function() {
+            const checked = $(this).is(':checked');
+            // 开启时先保持收起：设置弹窗关掉后用户看到的是新出现的球，而不是突然弹出的窗口
+            floatOpen = false;
+            saveConfig({ floatBall: checked });
+            renderInterface(false);
+            if (window.toastr) window.toastr.info(checked ? '已开启悬浮球：点屏幕边上的小球展开前端，可拖动换位置。' : '已关闭悬浮球，前端回到原来的位置。', { timeOut: 3000 });
+        });
         dialog.find('#cfg-tt-panel-mode').on('change', function() { saveConfig({ ttPanelMode: $(this).val() }); renderInterface(false); });
         dialog.find('#cfg-font-family').on('change', function() { saveConfig({ fontFamily: $(this).val() }); });
         
@@ -3680,7 +3732,10 @@ ${allTableNames.map(tName => {
                  titleColorVal = (HIGHLIGHT_COLORS[tRaw] || HIGHLIGHT_COLORS.orange).main;
              }
         }
-            const showPanel = !isCollapsed && currentTabName !== null;
+            // 悬浮球模式下「收起」由球负责：导航栏总是以展开态渲染，窗口的显隐看 floatOpen
+            const floatMode = isFloatMode(config);
+            const collapsedNow = isCollapsed && !floatMode;
+            const showPanel = !collapsedNow && currentTabName !== null;
             const tableHeights = getTableHeights();
             let styleHeight = 'height:auto; max-height:500px;';
 
@@ -3700,7 +3755,9 @@ ${allTableNames.map(tName => {
                 'acu-btn-open-visualizer': `<button class="acu-action-btn" id="acu-btn-open-visualizer" title="打开表格编辑器"><i class="fa-solid fa-table-cells"></i></button>`,
                 'acu-btn-manual-update': `<button class="acu-action-btn" id="acu-btn-manual-update" title="立即手动更新"><i class="fa-solid fa-bolt"></i></button>`,
                 'acu-btn-settings': `<button class="acu-action-btn" id="acu-btn-settings" title="全能设置"><i class="fa-solid fa-cog"></i></button>`,
-                'acu-btn-toggle': `<button class="acu-action-btn" id="acu-btn-toggle" title="${isCollapsed ? '展开' : '收起'}"><i class="fa-solid ${isCollapsed ? 'fa-chevron-up' : 'fa-chevron-down'}"></i></button>`
+                'acu-btn-toggle': floatMode
+                    ? `<button class="acu-action-btn" id="acu-btn-toggle" title="收起到悬浮球"><i class="fa-solid fa-chevron-down"></i></button>`
+                    : `<button class="acu-action-btn" id="acu-btn-toggle" title="${isCollapsed ? '展开' : '收起'}"><i class="fa-solid ${isCollapsed ? 'fa-chevron-up' : 'fa-chevron-down'}"></i></button>`
             };
 
             const savedActionOrder = getSavedActionOrder() || Object.keys(actionBtns);
@@ -3801,11 +3858,11 @@ ${allTableNames.map(tName => {
             const cssVars = `--acu-opt-cols:repeat(${optMaxPerRow}, 1fr); --acu-opt-btn-w:${optBtnW}; --acu-card-width:${config.cardWidth}px; --acu-font-size:${config.fontSize}px; --acu-opt-font-size:${config.optionFontSize || 13}px; --acu-dash-font-size:${config.dashboardFontSize || 13}px; --acu-highlight:${colorVal.main}; --acu-highlight-bg:${colorVal.bg}; --acu-accent:${colorVal.main}; --acu-title-color:${titleColorVal}; --acu-nav-cols:${gridCols}; --acu-text-max-height:${config.limitLongText!==false?'80px':'none'}; --acu-text-overflow:${config.limitLongText!==false?'auto':'visible'}`;
 
             let html = `
-                <div class="acu-wrapper acu-theme-${config.theme}${detectTTBounded() ? ` acu-tt-${config.ttPanelMode || 'fixed'}` : ''}" style="${cssVars}">
+                <div class="acu-wrapper acu-theme-${config.theme}${floatMode ? ` acu-float-mode${floatOpen ? ' acu-float-open' : ''}` : (detectTTBounded() ? ` acu-tt-${config.ttPanelMode || 'fixed'}` : '')}" style="${cssVars}">
                     <div class="acu-data-display acu-layout-${config.layout} ${showPanel ? 'visible' : ''} ${isAlreadyVisible ? 'acu-no-anim' : ''}" id="acu-data-area" style="${styleHeight}">
                         ${contentHtml}
                     </div>
-                    <div class="acu-nav-container ${isCollapsed ? 'collapsed' : ''} ${isEditingOrder ? 'editing-order' : ''} acu-collapse-${collapseStyle} acu-pill-${collapsePos}" id="acu-nav-bar">
+                    <div class="acu-nav-container ${collapsedNow ? 'collapsed' : ''} ${isEditingOrder ? 'editing-order' : ''} acu-collapse-${collapseStyle} acu-pill-${collapsePos}" id="acu-nav-bar">
                         ${orderControlsHtml}
                         <div class="acu-nav-tabs-area">
                             ${(showDash && config.dashboardPosition === 'panel') ? `<button class="acu-nav-btn ${currentTabName === TAB_DASHBOARD ? 'active' : ''}" data-table="${TAB_DASHBOARD}"><i class="fa-solid fa-tachometer-alt"></i><span>仪表盘</span></button>` : ''}
@@ -4481,6 +4538,12 @@ ${allTableNames.map(tName => {
             if (isTTBoundedM && !touchedMes) return;
             // 重渲染已按当前配置重新挂好主面板，继续往下会拿已脱离文档的旧 wrapper 再插一份
             if (isTTBoundedM && addedMes && reattachEmbedsAfterRemount()) return;
+            // 悬浮球模式：主面板固定挂在 body，不跟着楼层挪；只需重新对齐嵌入块
+            if (isFloatMode(currentConfig)) {
+                if ($wrapper[0].parentNode !== document.body) $('body').append($wrapper);
+                alignWrapperToMessageColumnNow();
+                return;
+            }
             if (isTTBoundedM && (currentConfig.ttPanelMode || 'fixed') === 'fixed') {
                 // 固定模式：优先保持 wrapper 在 #form_sheld/#send_form 前，彻底脱离 #chat 虚拟化；找不到表单时回退
                 const $formAnchorChk = $('#form_sheld, #send_form').first();
@@ -4574,6 +4637,156 @@ ${allTableNames.map(tName => {
         }
     };
 
+    // ───────── 悬浮球模式（V17.8.1）─────────
+    // 用户反馈：前端放在底部或消息里看着都不舒服，想要一个悬浮球。开启后主面板（导航栏 + 表格面板）
+    // 挂到 body 上、平时隐藏，只显示一个可拖动的小球；点球弹出、再点或点外面收起。
+    // 展开状态只存内存（刷新页面后默认收起），球的位置存 STORAGE_KEY_FLOAT_BALL_POS。
+    // 事件一律用原生监听、只绑在球本身和 window 上——不要往 .mes 的上层元素绑 jQuery 处理器（见交接文档 5a）。
+    const FLOAT_BALL_SIZE = 46;
+    const FLOAT_BALL_MARGIN = 8;
+    let floatOpen = false;
+    let floatResizeBound = false;
+    let floatResizeRaf = false;
+    const isFloatMode = (config) => (config || getConfig()).floatBall === true;
+
+    const loadFloatBallPos = () => {
+        try {
+            const v = JSON.parse(localStorage.getItem(STORAGE_KEY_FLOAT_BALL_POS));
+            if (v && (v.side === 'left' || v.side === 'right') && typeof v.y === 'number' && isFinite(v.y)) return v;
+        } catch (_) {}
+        return { side: 'right', y: 0.35 };
+    };
+    const saveFloatBallPos = (pos) => { try { localStorage.setItem(STORAGE_KEY_FLOAT_BALL_POS, JSON.stringify(pos)); } catch (_) {} };
+
+    // 球贴左/右边，纵向按比例；视口变化（转屏、键盘弹出）后重新夹回可见范围
+    const placeFloatBall = (ball, pos) => {
+        if (!ball) return;
+        const w = window.innerWidth, h = window.innerHeight;
+        const maxTop = Math.max(FLOAT_BALL_MARGIN, h - FLOAT_BALL_SIZE - FLOAT_BALL_MARGIN);
+        const top = Math.min(maxTop, Math.max(FLOAT_BALL_MARGIN, Math.round(pos.y * h - FLOAT_BALL_SIZE / 2)));
+        const left = pos.side === 'left' ? FLOAT_BALL_MARGIN : Math.max(FLOAT_BALL_MARGIN, w - FLOAT_BALL_SIZE - FLOAT_BALL_MARGIN);
+        ball.style.left = left + 'px';
+        ball.style.top = top + 'px';
+    };
+
+    // 弹出窗口跟随酒馆的聊天列（#sheld）左右边，底边落在输入框上沿上方；
+    // 表格面板从导航栏上方弹出，最大高度不超过导航栏到屏幕顶端的距离。
+    const positionFloatWindow = () => {
+        const { $ } = getCore();
+        const wrapper = $ ? $('.acu-wrapper.acu-float-mode')[0] : null;
+        if (!wrapper) return;
+        const w = window.innerWidth, h = window.innerHeight;
+        let left = FLOAT_BALL_MARGIN, width = w - FLOAT_BALL_MARGIN * 2;
+        const sheld = document.getElementById('sheld');
+        const sr = sheld ? sheld.getBoundingClientRect() : null;
+        if (sr && sr.width >= 240) {
+            left = Math.max(FLOAT_BALL_MARGIN, sr.left + 6);
+            width = Math.min(w - FLOAT_BALL_MARGIN * 2, sr.width - 12);
+        }
+        let bottom = 12;
+        const form = document.getElementById('send_form') || document.getElementById('form_sheld');
+        const fr = form ? form.getBoundingClientRect() : null;
+        if (fr && fr.height > 0 && fr.top > 0 && fr.top < h) bottom = Math.max(FLOAT_BALL_MARGIN, Math.round(h - fr.top + 8));
+        wrapper.style.setProperty('--acu-float-left', Math.round(left) + 'px');
+        wrapper.style.setProperty('--acu-float-width', Math.round(width) + 'px');
+        wrapper.style.setProperty('--acu-float-bottom', bottom + 'px');
+        const nav = wrapper.querySelector('.acu-nav-container');
+        const navH = nav ? nav.offsetHeight : 0;
+        const panelMax = Math.max(160, h - bottom - navH - 8 - 12);
+        wrapper.style.setProperty('--acu-float-panel-max', panelMax + 'px');
+    };
+
+    const setFloatOpen = (open) => {
+        const { $ } = getCore();
+        floatOpen = !!open;
+        if (!$) return;
+        $('.acu-wrapper.acu-float-mode').toggleClass('acu-float-open', floatOpen);
+        $('#acu-float-ball').toggleClass('active', floatOpen).attr('title', floatOpen ? '收起数据库前端' : '展开数据库前端');
+        if (floatOpen) positionFloatWindow();
+    };
+
+    const removeFloatBall = () => {
+        const ball = document.getElementById('acu-float-ball');
+        if (ball) ball.remove();
+        floatOpen = false;
+    };
+
+    // 拖动：按下后移动超过 5px 才算拖动（否则算点击）；松手吸附到最近的左/右边并记住位置
+    const bindFloatBallDrag = (ball) => {
+        let start = null, dragging = false;
+        ball.addEventListener('pointerdown', (e) => {
+            if (e.button != null && e.button !== 0) return;
+            const r = ball.getBoundingClientRect();
+            start = { x: e.clientX, y: e.clientY, left: r.left, top: r.top, id: e.pointerId };
+            dragging = false;
+            try { ball.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+        ball.addEventListener('pointermove', (e) => {
+            if (!start || e.pointerId !== start.id) return;
+            const dx = e.clientX - start.x, dy = e.clientY - start.y;
+            if (!dragging && Math.hypot(dx, dy) < 5) return;
+            dragging = true;
+            ball.classList.add('dragging');
+            const w = window.innerWidth, h = window.innerHeight;
+            const left = Math.min(w - FLOAT_BALL_SIZE, Math.max(0, start.left + dx));
+            const top = Math.min(h - FLOAT_BALL_SIZE, Math.max(0, start.top + dy));
+            ball.style.left = left + 'px';
+            ball.style.top = top + 'px';
+        });
+        const finish = (e, cancelled) => {
+            if (!start || e.pointerId !== start.id) return;
+            try { ball.releasePointerCapture(e.pointerId); } catch (_) {}
+            const wasDragging = dragging;
+            start = null; dragging = false;
+            ball.classList.remove('dragging');
+            if (wasDragging) {
+                const r = ball.getBoundingClientRect();
+                const pos = {
+                    side: (r.left + FLOAT_BALL_SIZE / 2) < window.innerWidth / 2 ? 'left' : 'right',
+                    y: Math.min(1, Math.max(0, (r.top + FLOAT_BALL_SIZE / 2) / window.innerHeight))
+                };
+                saveFloatBallPos(pos);
+                placeFloatBall(ball, pos);
+            } else if (!cancelled) {
+                if (isEditingOrder) return;
+                setFloatOpen(!floatOpen);
+            }
+        };
+        ball.addEventListener('pointerup', (e) => finish(e, false));
+        ball.addEventListener('pointercancel', (e) => finish(e, true));
+        // 点击事件不要冒泡到 document：那里的「点外面收起」会把刚打开的窗口又关掉
+        ball.addEventListener('click', (e) => { e.stopPropagation(); });
+    };
+
+    const ensureFloatBall = (config) => {
+        let ball = document.getElementById('acu-float-ball');
+        if (!ball) {
+            ball = document.createElement('div');
+            ball.id = 'acu-float-ball';
+            ball.setAttribute('role', 'button');
+            ball.innerHTML = '<i class="fa-solid fa-table-list"></i>';
+            document.body.appendChild(ball);
+            bindFloatBallDrag(ball);
+            placeFloatBall(ball, loadFloatBallPos());
+        }
+        ball.className = `acu-float-ball acu-theme-${config.theme}${floatOpen ? ' active' : ''}`;
+        ball.title = floatOpen ? '收起数据库前端' : '展开数据库前端';
+        if (!floatResizeBound) {
+            floatResizeBound = true;
+            window.addEventListener('resize', () => {
+                if (floatResizeRaf) return;
+                floatResizeRaf = true;
+                requestAnimationFrame(() => {
+                    floatResizeRaf = false;
+                    const b = document.getElementById('acu-float-ball');
+                    if (b) placeFloatBall(b, loadFloatBallPos());
+                    if (floatOpen) positionFloatWindow();
+                });
+            });
+        }
+        return ball;
+    };
+
     const insertHtmlToPage = (html) => {
         const { $ } = getCore();
         const $chat = $('#chat');
@@ -4586,6 +4799,17 @@ ${allTableNames.map(tName => {
         const isTTBounded = detectTTBounded();
         // 归一化：残留非法值一律回退 fixed，防止穿透到原生 bottom 分支直挂 #chat 触发 bounded fault
         const ttMode = isTTBounded ? (['fixed', 'scroll'].includes(config.ttPanelMode) ? config.ttPanelMode : 'fixed') : '';
+        if (isFloatMode(config)) {
+            // 悬浮球模式：挂 body（不进 #chat，也就不受 TT 虚拟化和切聊天清空影响），由球控制显隐
+            $('body').append($newContent);
+            ensureFloatBall(config);
+            positionFloatWindow();
+            requestAnimationFrame(positionFloatWindow); // 字体/图标加载后导航栏高度可能变化，下一帧再量一次
+            alignWrapperToMessageColumn();
+            ensureChatObservers($chat);
+            return;
+        }
+        removeFloatBall();
         if (ttMode === 'fixed') {
             const $formAnchor = $('#form_sheld, #send_form').first();
             if ($formAnchor.length) {
@@ -4913,7 +5137,9 @@ const checkRowChanged = (realIdx, row) => {
         autoCloseListener = function(e) {
             if (isEditingOrder) return;
             
-            if (!$('#acu-data-area').hasClass('visible')) return;
+            // 悬浮球模式下窗口开着时，点外面整个收回球里（保留当前打开的表，下次点球原样恢复）
+            const floatOpenNow = floatOpen && isFloatMode();
+            if (!$('#acu-data-area').hasClass('visible') && !floatOpenNow) return;
 
             const $target = $(e.target);
             
@@ -4927,7 +5153,9 @@ const checkRowChanged = (realIdx, row) => {
             
             if ($target.closest('#send_textarea, #send_but, #send_form, .bottom_bar_container').length) return;
             if ($target.is('input, textarea') || $target.prop('isContentEditable')) return;
+            if ($target.closest('#acu-float-ball').length) return;
 
+            if (floatOpenNow) { setFloatOpen(false); return; }
             closePanel();
         };
         autoCloseDoc.addEventListener('click', autoCloseListener);
@@ -5336,8 +5564,8 @@ const checkRowChanged = (realIdx, row) => {
         };
 
         const toggleUI = () => { isCollapsed = !isCollapsed; localStorage.setItem(STORAGE_KEY_UI_COLLAPSE, isCollapsed); renderInterface(false); };
-        $('#acu-btn-toggle').off('click').on('click', (e) => { e.stopPropagation(); if (isEditingOrder) return; toggleUI(); });
-        if (isCollapsed) { $('.acu-nav-container').off('click').on('click', (e) => { e.stopPropagation(); toggleUI(); }); }
+        $('#acu-btn-toggle').off('click').on('click', (e) => { e.stopPropagation(); if (isEditingOrder) return; if (isFloatMode()) { setFloatOpen(false); return; } toggleUI(); });
+        if (isCollapsed && !isFloatMode()) { $('.acu-nav-container').off('click').on('click', (e) => { e.stopPropagation(); toggleUI(); }); }
         
         $('#acu-btn-settings').off('click').on('click', (e) => {
             e.stopPropagation();
