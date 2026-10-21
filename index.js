@@ -3796,6 +3796,8 @@ ${allTableNames.map(tName => {
             const collapsePos = config.collapsePosition || 'center';
 
             const isAlreadyVisible = $('#acu-data-area').hasClass('visible');
+            // 悬浮窗口已经开着时重渲染（填表通知、翻页、改设置）不要重放弹出动画
+            const floatWasOpen = floatMode && $('.acu-wrapper.acu-float-open').length > 0;
 
             const actionBtns = {
                 'acu-btn-open-db': `<button class="acu-action-btn" id="acu-btn-open-db" title="打开数据库工作台（基础/高手模式）"><i class="fa-solid fa-database"></i></button>`,
@@ -3905,7 +3907,7 @@ ${allTableNames.map(tName => {
             const cssVars = `--acu-opt-cols:repeat(${optMaxPerRow}, 1fr); --acu-opt-btn-w:${optBtnW}; --acu-card-width:${config.cardWidth}px; --acu-font-size:${config.fontSize}px; --acu-opt-font-size:${config.optionFontSize || 13}px; --acu-dash-font-size:${config.dashboardFontSize || 13}px; --acu-highlight:${colorVal.main}; --acu-highlight-bg:${colorVal.bg}; --acu-accent:${colorVal.main}; --acu-title-color:${titleColorVal}; --acu-nav-cols:${gridCols}; --acu-text-max-height:${config.limitLongText!==false?'80px':'none'}; --acu-text-overflow:${config.limitLongText!==false?'auto':'visible'}`;
 
             let html = `
-                <div class="acu-wrapper acu-theme-${config.theme}${floatMode ? ` acu-float-mode${isFloatPanelView() ? ' acu-float-open' : ''}` : (detectTTBounded() ? ` acu-tt-${config.ttPanelMode || 'fixed'}` : '')}" style="${cssVars}">
+                <div class="acu-wrapper acu-theme-${config.theme}${floatMode ? ` acu-float-mode${isFloatPanelView() ? ' acu-float-open' : ''}${floatWasOpen ? ' acu-no-anim' : ''}` : (detectTTBounded() ? ` acu-tt-${config.ttPanelMode || 'fixed'}` : '')}" style="${cssVars}">
                     <div class="acu-data-display acu-layout-${config.layout} ${showPanel ? 'visible' : ''} ${isAlreadyVisible ? 'acu-no-anim' : ''}" id="acu-data-area" style="${styleHeight}">
                         ${contentHtml}
                     </div>
@@ -4800,9 +4802,11 @@ ${allTableNames.map(tName => {
         const sideLeft = menu.classList.contains('acu-float-side-left');
         const up = menu.classList.contains('acu-float-up');
         menu.className = `acu-float-menu acu-theme-${config.theme}${floatExpanded ? ' acu-float-open' : ''}${sideLeft ? ' acu-float-side-left' : ''}${up ? ' acu-float-up' : ''}`;
-        menu.innerHTML = floatSubItems(config).map((it) =>
+        const html = floatSubItems(config).map((it) =>
             `<div class="acu-float-sub" data-view="${it.view}" role="button" title="${it.label}"><span class="acu-float-sub-label">${it.label}</span><span class="acu-float-sub-btn"><i class="fa-solid ${it.icon}"></i></span></div>`
         ).join('');
+        // 内容没变就不重写：重写会让展开着的小球重放弹出动画
+        if (menu.getAttribute('data-html') !== html) { menu.innerHTML = html; menu.setAttribute('data-html', html); }
         layoutFloatMenu();
     };
 
@@ -4812,12 +4816,17 @@ ${allTableNames.map(tName => {
         if (!$) return;
         const config = getConfig();
         if (floatView === 'options' && !floatOptionsHtml) floatView = null;
-        $('.acu-wrapper.acu-float-mode').toggleClass('acu-float-open', isFloatPanelView());
+        const $fw = $('.acu-wrapper.acu-float-mode');
+        // 从收起变成打开时恢复弹出动画（重渲染时为了不重放动画加的 acu-no-anim 要去掉）
+        if (isFloatPanelView() && !$fw.hasClass('acu-float-open')) $fw.removeClass('acu-no-anim');
+        $fw.toggleClass('acu-float-open', isFloatPanelView());
         $('#acu-float-options').toggleClass('acu-float-open', floatView === 'options');
         const ball = document.getElementById('acu-float-ball');
         if (ball) {
             const busy = floatExpanded || !!floatView;
-            ball.className = `acu-float-ball acu-theme-${config.theme}${busy ? ' active' : ''}${floatOptionsHtml && !busy ? ' acu-float-has-dot' : ''}`;
+            // 拖动中刷新（填表通知等）要保留 dragging，否则拖到一半恢复动画过渡、跟手变卡
+            const dragging = ball.classList.contains('dragging');
+            ball.className = `acu-float-ball acu-theme-${config.theme}${busy ? ' active' : ''}${floatOptionsHtml && !busy ? ' acu-float-has-dot' : ''}${dragging ? ' dragging' : ''}`;
             ball.title = busy ? '收起' : (floatOptionsHtml ? '数据库前端（有新的行动选项）' : '数据库前端');
             ball.innerHTML = `<i class="fa-solid ${busy ? 'fa-xmark' : 'fa-table-list'}"></i>`;
         }
@@ -4865,7 +4874,15 @@ ${allTableNames.map(tName => {
         }
         win.className = `acu-float-window acu-theme-${config.theme}${floatView === 'options' ? ' acu-float-open' : ''}`;
         win.setAttribute('style', cssVars);
-        win.innerHTML = `<div class="acu-option-panel"><div class="acu-opt-header">行动选项</div>${floatOptionsHtml}</div>`;
+        // 选项没变就不重写；变了也保留滚动位置（每次填表通知都会重渲染）
+        if (win.getAttribute('data-html') !== floatOptionsHtml) {
+            const oldPanel = win.querySelector('.acu-option-panel');
+            const top = oldPanel ? oldPanel.scrollTop : 0;
+            win.innerHTML = `<div class="acu-option-panel"><div class="acu-opt-header">行动选项</div>${floatOptionsHtml}</div>`;
+            win.setAttribute('data-html', floatOptionsHtml);
+            const panel = win.querySelector('.acu-option-panel');
+            if (panel && top) panel.scrollTop = top;
+        }
     };
 
     const clearFloatOptions = () => {
@@ -5305,6 +5322,9 @@ const checkRowChanged = (realIdx, row) => {
             
             // 悬浮球形态下有窗口开着或小球展开着时，点外面整个收回球里（保留当前打开的表，下次打开原样恢复）
             const floatOpenNow = (!!floatView || floatExpanded) && isFloatMode();
+            // 窗口已收回球里时，隐藏着的表格面板仍带 visible；不 return 的话下一次点外面会走到 closePanel
+            // 把记住的表清掉，下次打开就只剩导航栏
+            if (isFloatMode() && !floatOpenNow) return;
             if (!$('#acu-data-area').hasClass('visible') && !floatOpenNow) return;
 
             const $target = $(e.target);
