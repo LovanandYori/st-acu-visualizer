@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.8.2'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.8.3'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -4760,6 +4760,23 @@ ${allTableNames.map(tName => {
     };
     const saveFloatBallPos = (pos) => { try { localStorage.setItem(STORAGE_KEY_FLOAT_BALL_POS, JSON.stringify(pos)); } catch (_) {} };
 
+    // 把「离屏幕底边多少像素」换算成 position:fixed 元素的 CSS bottom 值（V17.8.3）。
+    // 酒馆给 html 加了 transform: translateZ(0)，手机布局下又把 body 设成 position:fixed，
+    // 于是 html 高度为 0、却成了所有 fixed 元素的包含块：bottom 是从屏幕顶端（y=0）往上算的，
+    // 写 bottom:48px 的窗口整个跑到屏幕上方看不见（反馈「点了表格小球什么都没出来」）。
+    // 用一个零尺寸的 fixed 探针量出包含块底边的实际位置，再按差值修正；桌面布局下差值是 0。
+    const toFixedBottom = (fromViewportBottom) => {
+        let cbBottom = window.innerHeight;
+        try {
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:fixed;left:0;bottom:0;width:0;height:0;visibility:hidden;pointer-events:none;';
+            document.body.appendChild(probe);
+            cbBottom = probe.getBoundingClientRect().bottom;
+            probe.remove();
+        } catch (_) {}
+        return Math.round(fromViewportBottom + cbBottom - window.innerHeight);
+    };
+
     // 小球列跟着主球：主球在屏幕下半部分就往上展开，否则往下；文字标签放在靠屏幕中间的一侧
     const layoutFloatMenu = () => {
         const ball = document.getElementById('acu-float-ball');
@@ -4771,7 +4788,7 @@ ${allTableNames.map(tName => {
         menu.classList.toggle('acu-float-up', up);
         menu.classList.toggle('acu-float-side-left', left + FLOAT_BALL_SIZE / 2 < w / 2);
         menu.style.left = Math.round(left + (FLOAT_BALL_SIZE - FLOAT_SUB_SIZE) / 2) + 'px';
-        if (up) { menu.style.top = 'auto'; menu.style.bottom = Math.round(h - top + 10) + 'px'; }
+        if (up) { menu.style.top = 'auto'; menu.style.bottom = toFixedBottom(h - top + 10) + 'px'; }
         else { menu.style.bottom = 'auto'; menu.style.top = Math.round(top + FLOAT_BALL_SIZE + 10) + 'px'; }
     };
 
@@ -4804,10 +4821,11 @@ ${allTableNames.map(tName => {
         const form = document.getElementById('send_form') || document.getElementById('form_sheld');
         const fr = form ? form.getBoundingClientRect() : null;
         if (fr && fr.height > 0 && fr.top > 0 && fr.top < h) bottom = Math.max(FLOAT_BALL_MARGIN, Math.round(h - fr.top + 8));
+        const cssBottom = toFixedBottom(bottom);
         targets.forEach((el) => {
             el.style.setProperty('--acu-float-left', Math.round(left) + 'px');
             el.style.setProperty('--acu-float-width', Math.round(width) + 'px');
-            el.style.setProperty('--acu-float-bottom', bottom + 'px');
+            el.style.setProperty('--acu-float-bottom', cssBottom + 'px');
             const nav = el.querySelector('.acu-nav-container');
             const navH = nav ? nav.offsetHeight + 8 : 0;
             el.style.setProperty('--acu-float-panel-max', Math.max(160, h - bottom - navH - 12) + 'px');

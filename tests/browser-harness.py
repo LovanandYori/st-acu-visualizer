@@ -455,4 +455,29 @@ with sync_playwright() as p:
     check('T18 enabling with only empty tables explains where to start', '新增一行' in pg.evaluate("() => window.__info.join('|')"))
     b.close()
 
+    # T19 (V17.8.3): 酒馆手机布局——html 带 transform: translateZ(0)、body 是 position:fixed，
+    # html 高度为 0 却成了 fixed 元素的包含块。旧代码用 bottom 定位的表格/选项窗口和向上展开的小球列
+    # 都跑到屏幕顶端上方（反馈：点了表格小球什么都没出来，只剩一个 ×）。
+    ST_PHONE_CSS = "() => { const s = document.createElement('style'); s.textContent = 'html { transform: translateZ(0); } body { position: fixed; margin: 0; width: 100%; height: 100%; overflow: hidden; }'; document.head.appendChild(s); }"
+    on_screen = "([s, h]) => { const e = document.querySelector(s); if (!e || getComputedStyle(e).display === 'none') return null; const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), ok: r.top >= 0 && r.bottom <= h && r.height > 0 }; }"
+    for y, where in ((0.3, 'upper'), (0.75, 'lower')):
+        b, pg, errs = boot(p, {'floatBall': True, 'showOptionPanel': True}, viewport={'width': 390, 'height': 844}, wait_state='attached',
+                           before_mock=f"() => {{ ({ST_PHONE_CSS})(); localStorage.setItem('acu_float_ball_pos', JSON.stringify({{ side: 'right', y: {y} }})); ({FLOAT_CHAT})(); }}", pre=FLOAT_OPTS)
+        pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+        cb = pg.evaluate("() => document.documentElement.getBoundingClientRect().height")
+        bb = pg.evaluate(ball_box)
+        pg.mouse.click(bb['x'], bb['y']); pg.wait_for_timeout(300)
+        items = pg.evaluate(subs)
+        menu_ok = len(items) == 3 and all(0 <= i['t'] and i['b'] <= 844 for i in items)
+        tap_sub(pg, 'table'); open_tab(pg, '背包')
+        nav = pg.evaluate(on_screen, ['#acu-nav-bar', 844]); panel = pg.evaluate(on_screen, ['#acu-data-area.visible', 844])
+        pg.mouse.click(bb['x'], bb['y']); pg.wait_for_timeout(250)
+        pg.mouse.click(bb['x'], bb['y']); pg.wait_for_timeout(250); tap_sub(pg, 'options')
+        opts = pg.evaluate(on_screen, ['#acu-float-options .acu-option-panel', 844])
+        check(f'T19 ST phone layout (html 0 high, ball {where}): sub-balls, table window and options window are on screen',
+              cb == 0 and menu_ok and nav and nav['ok'] and panel and panel['ok'] and opts and opts['ok'],
+              f'html={cb} subs={json.dumps(items)} nav={nav} panel={panel} opts={opts}')
+        check(f'T0 no page errors (ST phone layout {where})', not errs, '; '.join(errs)[:200])
+        b.close()
+
 print(f'\n{sum(results)}/{len(results)} passed')
