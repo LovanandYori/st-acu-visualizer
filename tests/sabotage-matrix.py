@@ -133,7 +133,7 @@ INJECTIONS = [
     ('归位逻辑退回 $chatNode.find 语义（后代选择器）',
      "$chatNode.children('.mes').last();", "$chatNode.find('.mes').last();", 1),
     ('补挂选项不看归属规则（把不该显示的旧选项挂回来）',
-     "missing(shouldShowOptions() && lastOptionDataCheck !== ''", "missing(lastOptionDataCheck !== ''", 1),
+     "missing(!isFloatMode() && shouldShowOptions() && lastOptionDataCheck !== ''", "missing(!isFloatMode() && lastOptionDataCheck !== ''", 1),
     # ── 第七批：选项归属（V17.7.5，用户实报：新 AI 楼生成中显示上一楼选项）──
     ('选项显隐不看归属楼（= 修复前：最新楼是 AI 楼就显示）',
      'return latest !== null && latest === optionsOwnerFloorKey && latest !== optionsSendSuppressedKey;',
