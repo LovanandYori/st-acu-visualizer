@@ -45,6 +45,7 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 | `cache-freshness` | 活引用隔离；同 key 整表原地替换必须检出；未变时复用缓存；`dataVersion` 语义；采样边界如实钉住 | **不桩** `sheetFingerprints`/`cloneTableDataPartial`，注入计数版 `structuredClone` |
 | `data-plumbing` | `processJsonData` 以**表名**为键、跳过表头行、**不改传入对象**（批量删会把 DB 活引用喂进来）；`lightFingerprint` 的轮询变更检测 | 函数直接吃**同一个对象实例**（不 JSON 序列化，否则 mutate 失效、身份断言测不到） |
 | `read-only-gates` | 只读时三条写库路径（impl / `insertRow` / 批量 `deleteRow`）一条都碰不到；批量删期间 `bulkOpActive` 挂起通知；查看交互完好；DB 通知仍注册得上 | Proxy 间谍 + 循环内状态观察点；批量删分支按「`deleteRow` 之前最后一次命中」锚定 |
+| `config-persist` | 设置写入：正常写入清缓存；存储被高亮快照占满时腾出后重试；一直写不进时新设置留在内存、本次页面生效、只提示一次、返回 false；后续改动不丢前一次的设置 | 真跑 `getConfig`/`saveConfig` 源码，假 `localStorage` 按模式抛 Quota 错 |
 | `render-cells` | DB 的 `null` 不渲染成字面量；`0`/`false` 不被吞；`cellStr` 作用域完整；>50 阈值；表头下标与标题格跳过；`<` `"` `'` `&` 四类转义 | 两处渲染语句**分档**（表卡片 vs 快速查看契约不同）；异常被捕获，不崩套件 |
 | `save-pipeline` | 精确写被拒**绝不**降级全量 import；行下标 1-based；缺 `sheet_*` 键拒存；保存串行化且失败不吞后续 | 断言「间谍记录到的调用参数」而非源码字符串 |
 | `manual-update-contract` | 手动填表**必须**显式传 `{confirm:true}`（ST 1.0.0 起无参调用会 `skipConfirm`，跳过那道「会删除 checkpoint」的高风险确认框）；恰好一处调用点；旧签名忽略多余实参 | 真跑调用表达式验证实参确实传到 DB |
@@ -52,7 +53,7 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 
 ## 注入矩阵（`sabotage-matrix.py`）
 
-**51 处真实缺陷注入，51 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
+**53 处真实缺陷注入，53 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
 改动测试或生产代码后请重跑，退出码非 0 表示「有注入无人发现」**或**「有注入锚点已失效」。
 
 <details>

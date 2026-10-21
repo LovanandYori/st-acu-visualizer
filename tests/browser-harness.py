@@ -405,4 +405,54 @@ with sync_playwright() as p:
     check('T17 TT virtualization: panel stays on body without TT classes and works', st == {'onBody': True, 'tt': [], 'cards': 3} and not errs, json.dumps(st) + str(errs)[:200])
     b.close()
 
+    # T18 (V17.8.2): 「允许手动编辑表格」点了没反应——设置写不进 localStorage、或表全是空表没有单元格可点。
+    TOAST_SPY = "() => { window.__warn = []; window.__info = []; window.toastr.warning = m => window.__warn.push(m); window.toastr.info = m => window.__info.push(m); }"
+    def toggle_edit(pg):
+        pg.evaluate("() => document.querySelector('#acu-btn-settings').click()"); pg.wait_for_timeout(300)
+        pg.evaluate("() => document.querySelector('[data-target=\"sec-table-mgmt\"]').click()"); pg.wait_for_timeout(300)
+        pg.evaluate("() => document.querySelector('#cfg-allow-edit').click()"); pg.wait_for_timeout(300)
+        pg.evaluate("() => document.querySelector('#dlg-close').click()"); pg.wait_for_timeout(300)
+    # (a) 存储一直写不进：本次页面里仍然生效，并提示一次
+    b, pg, errs = boot(p, {'allowTableEdit': False, 'showDashboard': False})
+    pg.evaluate(TOAST_SPY)
+    pg.evaluate("() => { const o = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (k === 'acu_ui_config_v18') throw new DOMException('full', 'QuotaExceededError'); return o.call(this, k, v); }; }")
+    toggle_edit(pg); open_tab(pg, '背包')
+    pg.evaluate("() => document.querySelector('#acu-data-area .acu-cell').click()"); pg.wait_for_timeout(200)
+    st = pg.evaluate("() => ({ menu: !!document.querySelector('.acu-cell-menu'), warn: window.__warn.length, stored: JSON.parse(localStorage.getItem('acu_ui_config_v18')).allowTableEdit, info: window.__info.join('|') })")
+    check('T18 storage full: toggle still enables editing for this page', st['menu'] and st['stored'] is False, json.dumps(st, ensure_ascii=False))
+    check('T18 storage full: one warning, no claim it was saved', st['warn'] == 1 and '本次打开页面期间有效' in st['info'], json.dumps(st, ensure_ascii=False))
+    check('T0 no page errors (storage full run)', not errs, '; '.join(errs)[:200])
+    b.close()
+    # (b) 存储满是被前端自己的高亮快照占的：腾掉快照后设置能保存下来
+    b, pg, errs = boot(p, {'allowTableEdit': False, 'showDashboard': False})
+    pg.evaluate(TOAST_SPY)
+    pg.evaluate("() => { localStorage.setItem('acu_data_snapshot_v18_5', 'x'.repeat(1000)); const o = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (k === 'acu_ui_config_v18' && localStorage.getItem('acu_data_snapshot_v18_5') !== null) throw new DOMException('full', 'QuotaExceededError'); return o.call(this, k, v); }; }")
+    toggle_edit(pg)
+    st = pg.evaluate("() => ({ stored: JSON.parse(localStorage.getItem('acu_ui_config_v18')).allowTableEdit, snap: localStorage.getItem('acu_data_snapshot_v18_5'), warn: window.__warn.length })")
+    check('T18 storage full of our snapshot: snapshot freed, setting persisted, no warning', st == {'stored': True, 'snap': None, 'warn': 0}, json.dumps(st))
+    b.close()
+    # (c) 全是空表：开了编辑后空表面板有「新增一行」，点了插入一行再能点单元格；只读时没有这个按钮
+    INSERT_OK = "() => { window.AutoCardUpdaterAPI.insertRow = async (t, o) => { window.__calls.push(['insertRow', t, o]); const s = Object.values(window.__data).find(x => x && x.name === t); s.content.push([String(s.content.length), ...s.content[0].slice(1).map(h => o[h] ?? '')]); window.__notify(); return s.content.length - 1; }; }"
+    b, pg, errs = boot(p, {'allowTableEdit': False, 'showDashboard': False}, post_mock=HEADER_ONLY)
+    open_tab(pg, '背包物品表')
+    check('T18 read-only empty table: no add-row button', pg.evaluate("() => !document.querySelector('#acu-btn-add-first-row')"))
+    b.close()
+    b, pg, errs = boot(p, {'showDashboard': False}, post_mock=HEADER_ONLY)
+    pg.evaluate(INSERT_OK); pg.evaluate(TOAST_SPY)
+    open_tab(pg, '背包物品表')
+    has_btn = pg.evaluate("() => !!document.querySelector('#acu-btn-add-first-row')")
+    pg.evaluate("() => document.querySelector('#acu-btn-add-first-row').click()"); pg.wait_for_timeout(400)
+    if not pg.evaluate("() => !!document.querySelector('#acu-data-area.visible')"): open_tab(pg, '背包物品表')
+    st = pg.evaluate("() => ({ calls: window.__calls.filter(c => c[0] === 'insertRow').map(c => [c[1], c[2]]), cards: document.querySelectorAll('#acu-data-area .acu-data-card').length })")
+    check('T18 empty table: add-row button inserts a blank row and a card appears', has_btn and st == {'calls': [['背包物品表', {'物品': '', '数量': ''}]], 'cards': 1}, json.dumps(st, ensure_ascii=False))
+    pg.evaluate("() => document.querySelector('#acu-data-area .acu-cell').click()"); pg.wait_for_timeout(200)
+    check('T18 empty table: the new row is editable', pg.evaluate("() => !!document.querySelector('.acu-cell-menu')"))
+    check('T0 no page errors (empty-table edit run)', not errs, '; '.join(errs)[:200])
+    b.close()
+    # (d) 打开设置开启编辑时表全是空的：提示里告诉用户从「新增一行」开始
+    b, pg, errs = boot(p, {'allowTableEdit': False, 'showDashboard': False}, post_mock=HEADER_ONLY)
+    pg.evaluate(TOAST_SPY); toggle_edit(pg)
+    check('T18 enabling with only empty tables explains where to start', '新增一行' in pg.evaluate("() => window.__info.join('|')"))
+    b.close()
+
 print(f'\n{sum(results)}/{len(results)} passed')

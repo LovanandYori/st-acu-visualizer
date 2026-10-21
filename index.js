@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.8.1'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.8.2'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -538,7 +538,36 @@
             return { ...DEFAULT_CONFIG, ...saved };
         } catch (e) { return DEFAULT_CONFIG; }
     };
-    const saveConfig = (newConfig) => { const current = getConfig(); const merged = { ...current, ...newConfig }; try { localStorage.setItem(STORAGE_KEY_UI_CONFIG, JSON.stringify(merged)); } catch (e) { console.error(e); } configCache = null; applyConfigStyles(merged); };
+    // 设置写不进 localStorage（最常见是浏览器存储满了，手机上多个脚本/扩展共用 5MB 时容易发生）时：
+    // 1) 先腾出前端自己的高亮快照缓存（它只是冷启动兜底，内存里还有一份）再试一次；
+    // 2) 仍失败就把新设置留在内存里，本次打开页面期间照常生效，并提示一次刷新后会恢复。
+    // 旧实现吞掉异常后把 configCache 清空，下一次 getConfig 又读回旧值——
+    // 表现为「开关点了会动，但功能没开，再打开设置又是关的」（V17.8.2 用户反馈）。
+    let configWriteWarned = false;
+    const saveConfig = (newConfig) => {
+        const current = getConfig();
+        const merged = { ...current, ...newConfig };
+        let persisted = false;
+        let text = null;
+        try { text = JSON.stringify(merged); } catch (e) { console.error(e); }
+        if (text !== null) {
+            try { localStorage.setItem(STORAGE_KEY_UI_CONFIG, text); persisted = true; }
+            catch (e1) {
+                try {
+                    localStorage.removeItem(STORAGE_KEY_LAST_SNAPSHOT);
+                    localStorage.setItem(STORAGE_KEY_UI_CONFIG, text);
+                    persisted = true;
+                } catch (e2) { console.error('[ACU-UI] 设置保存失败:', e2); }
+            }
+        }
+        configCache = persisted ? null : merged;
+        if (!persisted && !configWriteWarned) {
+            configWriteWarned = true;
+            if (window.toastr) window.toastr.warning('浏览器本地存储已满，设置没能保存：这次打开页面期间仍然有效，刷新后会恢复原样。可以清理一下浏览器里其他脚本/扩展占用的存储再试。', { timeOut: 8000 });
+        }
+        applyConfigStyles(merged);
+        return persisted;
+    };
     
     // M-03 存储缓存补齐：仿 getConfig:335 的 configCache 模式，内存缓存 + save 时失效，消除每 render 5-6 次 JSON.parse
     let tableHeightsCache = null;
@@ -3137,7 +3166,7 @@ ${allTableNames.map(tName => {
         dialog.find('#cfg-grid-cols').on('change', function () { saveConfig({ gridColumns: parseInt($(this).val()) }); renderInterface(false); });
         dialog.find('#cfg-allow-edit').on('change', function () {
             const checked = $(this).is(':checked');
-            saveConfig({ allowTableEdit: checked });
+            const persisted = saveConfig({ allowTableEdit: checked });
             dialog.find('#hint-edit-lock').toggle(checked === false);
             // 立即重渲染：让单元格编辑菜单与多选按钮随开关出现/消失。
             // 关闭时顺带清掉多选/待删状态，避免残留勾选让用户以为还能删。
@@ -3150,7 +3179,13 @@ ${allTableNames.map(tName => {
             }
             try { renderInterface(true); } catch (_) {}
             if (window.toastr) {
-                window.toastr.info(checked ? '已开启手动编辑：现在可以直接修改表格。' : '已切换为只读：面板仅可查看，不能修改表格。', { timeOut: 2500 });
+                // 存储写失败时 saveConfig 已另弹警告，这里只补一句「刷新后失效」，不再说成功保存
+                const tail = persisted ? '' : '（本次打开页面期间有效）';
+                // 所有表都没有数据行时没有单元格可点，告诉用户从哪里开始
+                const noRows = checked && !auditTableRows(cachedTableData).rows;
+                window.toastr.info(checked
+                    ? (noRows ? `已开启手动编辑${tail}。表格目前都还没有数据行：打开某张表，点「新增一行」后再点单元格修改。` : `已开启手动编辑${tail}：点表格里的单元格即可修改。`)
+                    : `已切换为只读${tail}：面板仅可查看，不能修改表格。`, { timeOut: noRows ? 5000 : 2500 });
             }
         });
         
@@ -5043,7 +5078,7 @@ ${allTableNames.map(tName => {
     };
 
     const renderTableContent = (tableData, tableName) => {
-        if (!tableData || !tableData.rows.length) return `<div class="acu-panel-header"><div class="acu-panel-title">${escapeHtml(tableName)} ${(tableData && tableData._missingInfo) ? '<span style="color:#e74c3c;font-weight:bold;">缺少' + escapeHtml(tableData._missingInfo) + '</span>' : ((tableData && tableData._hasWarning) ? '<span style="color:#e74c3c;font-weight:bold;">数量异常</span>' : '<span style="color:var(--acu-text-sub);font-weight:normal;">0</span>')}</div><div class="acu-header-actions"><button class="acu-header-btn" id="acu-btn-close" title="关闭"><i class="fa-solid fa-times"></i></button></div></div><div class="acu-panel-content"><div style="text-align:center;color:var(--acu-text-sub);padding:20px;line-height:1.7;">${getEmptyReadMismatch() ? escapeHtml(EMPTY_MISMATCH_HINT) : '暂无数据'}</div></div>`;
+        if (!tableData || !tableData.rows.length) return `<div class="acu-panel-header"><div class="acu-panel-title">${escapeHtml(tableName)} ${(tableData && tableData._missingInfo) ? '<span style="color:#e74c3c;font-weight:bold;">缺少' + escapeHtml(tableData._missingInfo) + '</span>' : ((tableData && tableData._hasWarning) ? '<span style="color:#e74c3c;font-weight:bold;">数量异常</span>' : '<span style="color:var(--acu-text-sub);font-weight:normal;">0</span>')}</div><div class="acu-header-actions"><button class="acu-header-btn" id="acu-btn-close" title="关闭"><i class="fa-solid fa-times"></i></button></div></div><div class="acu-panel-content"><div style="text-align:center;color:var(--acu-text-sub);padding:20px;line-height:1.7;">${getEmptyReadMismatch() ? escapeHtml(EMPTY_MISMATCH_HINT) : '暂无数据'}${(tableData && tableData.key && Array.isArray(tableData.headers) && tableData.headers.length > 1 && isTableEditAllowed()) ? `<div style="margin-top:12px;"><button class="acu-btn-block" id="acu-btn-add-first-row" data-key="${escapeHtml(tableData.key)}" data-tname="${escapeHtml(tableName)}" style="display:inline-flex;width:auto;margin:0 auto;padding:8px 18px;"><i class="fa-solid fa-plus"></i> 新增一行</button></div>` : ''}</div></div>`;
         
         const headers = tableData.headers.slice(1);
         let titleColIndex = 1;const codeIdx = tableData.headers.findIndex(h => h && (String(h).includes('编码') || String(h).includes('索引')));if (codeIdx > 0) titleColIndex = codeIdx;
@@ -5407,6 +5442,16 @@ const checkRowChanged = (realIdx, row) => {
             } else {
                 $('.acu-cell').off('click').on('click', function(e) { e.stopPropagation(); notifyEditBlocked(); });
             }
+            // 空表没有单元格可点，「插入新行」入口在单元格菜单里——开了手动编辑也无从下手。
+            // 空表面板给一个「新增一行」按钮，插入后再点单元格编辑。
+            $('#acu-btn-add-first-row').off('click').on('click', async function(e) {
+                e.stopPropagation();
+                const $b = $(this);
+                if ($b.prop('disabled')) return;
+                $b.prop('disabled', true);
+                try { await insertBlankRow(String($b.data('key')), String($b.data('tname'))); }
+                finally { $b.prop('disabled', false); }
+            });
              $('.acu-dash-interactive').off('click').on('click', function(e) {
                 e.stopPropagation();
                 const tableName = $(this).data('tname');
@@ -6188,6 +6233,60 @@ const checkRowChanged = (realIdx, row) => {
         setup('.acu-nav-actions-area .acu-action-btn');
     };
 
+    // 在表尾插入一行空行（单元格菜单「插入新行」、空表面板「新增一行」共用）。
+    const insertBlankRow = async (tableKey, tableName) => {
+        // insertRow 直连 DB API，不经过 saveDataToDatabaseImpl，需在此单独过闸门。
+        if (!isTableEditAllowed()) { notifyEditBlocked(); return; }
+        const rawData = getTableData();
+        if (rawData && rawData[tableKey]?.content) {
+            const sheet = rawData[tableKey];
+            const headers = sheet.content[0] || [];
+            const colCount = headers.length || 2;
+            // 不再伪造 row_id（在 SQLite 存储模式下 row_id 是主键，伪造会触发静默写入失败）。
+            // 改为构造以列名为键的数据对象交给 DB 的 insertRow，让 DB 自行处理主键与持久化。
+            const newRowObj = {};
+            for (let c = 0; c < colCount; c++) {
+                const colName = headers[c];
+                if (!colName) continue;
+                // row_id 列跳过，交给 DB 自增；其余列置空。
+                // 只认 row_id/首列——正则匹配「编号」会误跳「道具编号」等合法业务列。
+                if (c === 0 || colName === 'row_id' || colName === 'row_id ') continue;
+                newRowObj[colName] = '';
+            }
+            const api = getCore().getDB();
+            const hasInsertApi = !!(api && typeof api.insertRow === 'function');
+            if (window.toastr) window.toastr.info('正在插入新行...');
+            let ok = false;
+            try {
+                if (hasInsertApi) {
+                    const result = await api.insertRow(tableName, newRowObj);
+                    ok = (result !== false && result !== -1 && result !== null && result !== undefined);
+                }
+            } catch (e) { console.warn('[ACU-API] insertRow 调用失败:', e); ok = false; }
+            // 有 insertRow 时 DB 已拒绝本次精确写，不得降级全量 data_replace；
+            // 直接报告失败，避免全量保存路径再弹一条互相矛盾的 toast。
+            if (!ok && hasInsertApi) {
+                if (window.toastr) window.toastr.error('插入新行失败：数据库未接受本次写入，请稍后重试。');
+                return;
+            }
+            // 仅当旧库完全没有 insertRow 时才允许全量保存兜底；位置语义对齐 DB
+            // insertRow（始终表尾 push），不伪造 row_id。
+            if (!ok) {
+                const newRow = headers.map(() => '');
+                sheet.content.push(newRow);
+                let savedOk = false;
+                try { savedOk = (await saveDataToDatabase(rawData, false)) === true; } catch (e) { console.warn('[ACU-API] 兜底保存异常:', e); }
+                if (!savedOk) {
+                    sheet.content.pop(); // 保存失败:回滚幻影行,避免缓存残留
+                    if (window.toastr) window.toastr.error('插入新行失败，已回滚。');
+                    return;
+                }
+            } else {
+                // 成功路径：让 DB 的更新回调驱动刷新，无需手动 render。
+            }
+        }
+    };
+
     const showCellMenu = (e, cell) => {
         const { $ } = getCore();
         $('.acu-cell-menu, .acu-menu-backdrop').remove();
@@ -6339,56 +6438,7 @@ const checkRowChanged = (realIdx, row) => {
         });
         menu.find('#act-insert').click(async () => {
             closeAll();
-            // insertRow 直连 DB API，不经过 saveDataToDatabaseImpl，需在此单独过闸门。
-            if (!isTableEditAllowed()) { notifyEditBlocked(); return; }
-            const rawData = getTableData();
-            if (rawData && rawData[tableKey]?.content) {
-                const sheet = rawData[tableKey];
-                const headers = sheet.content[0] || [];
-                const colCount = headers.length || 2;
-                // 不再伪造 row_id（在 SQLite 存储模式下 row_id 是主键，伪造会触发静默写入失败）。
-                // 改为构造以列名为键的数据对象交给 DB 的 insertRow，让 DB 自行处理主键与持久化。
-                const newRowObj = {};
-                for (let c = 0; c < colCount; c++) {
-                    const colName = headers[c];
-                    if (!colName) continue;
-                    // row_id 列跳过，交给 DB 自增；其余列置空。
-                    // 只认 row_id/首列——正则匹配「编号」会误跳「道具编号」等合法业务列。
-                    if (c === 0 || colName === 'row_id' || colName === 'row_id ') continue;
-                    newRowObj[colName] = '';
-                }
-                const api = getCore().getDB();
-                const hasInsertApi = !!(api && typeof api.insertRow === 'function');
-                if (window.toastr) window.toastr.info('正在插入新行...');
-                let ok = false;
-                try {
-                    if (hasInsertApi) {
-                        const result = await api.insertRow(tableName, newRowObj);
-                        ok = (result !== false && result !== -1 && result !== null && result !== undefined);
-                    }
-                } catch (e) { console.warn('[ACU-API] insertRow 调用失败:', e); ok = false; }
-                // 有 insertRow 时 DB 已拒绝本次精确写，不得降级全量 data_replace；
-                // 直接报告失败，避免全量保存路径再弹一条互相矛盾的 toast。
-                if (!ok && hasInsertApi) {
-                    if (window.toastr) window.toastr.error('插入新行失败：数据库未接受本次写入，请稍后重试。');
-                    return;
-                }
-                // 仅当旧库完全没有 insertRow 时才允许全量保存兜底；位置语义对齐 DB
-                // insertRow（始终表尾 push），不伪造 row_id。
-                if (!ok) {
-                    const newRow = headers.map(() => '');
-                    sheet.content.push(newRow);
-                    let savedOk = false;
-                    try { savedOk = (await saveDataToDatabase(rawData, false)) === true; } catch (e) { console.warn('[ACU-API] 兜底保存异常:', e); }
-                    if (!savedOk) {
-                        sheet.content.pop(); // 保存失败:回滚幻影行,避免缓存残留
-                        if (window.toastr) window.toastr.error('插入新行失败，已回滚。');
-                        return;
-                    }
-                } else {
-                    // 成功路径：让 DB 的更新回调驱动刷新，无需手动 render。
-                }
-            }
+            await insertBlankRow(tableKey, tableName);
         });
 
         menu.find('#act-edit-card').click(() => {

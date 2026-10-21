@@ -100,9 +100,16 @@ function makeImpl(allowed) {
   // insertRow 直连路径（不经 impl）
   section('[E-3b] insertRow 直连路径的闸门（真跑该处理器）');
   {
-    const decl = sliceConstFn(src, "menu.find('#act-insert').click(async () => {", 'act-insert handler');
-    const a = anchorIndex(src, "menu.find('#act-insert').click(async () => {");
-    const bodyStart = src.indexOf('{', a + 10);
+    // V17.8.2 起插入逻辑抽成 insertBlankRow，单元格菜单与空表「新增一行」按钮共用；
+    // 两个入口都必须走它（闸门在它里面），这里先确认入口，再真跑它的函数体。
+    const menuA = anchorIndex(src, "menu.find('#act-insert').click(async () => {");
+    const menuBody = src.slice(menuA, findBlockEnd(src, src.indexOf('{', menuA + 10)));
+    ok(/await insertBlankRow\(tableKey, tableName\)/.test(menuBody), '单元格菜单「插入新行」走 insertBlankRow');
+    const btnA = anchorIndex(src, "$('#acu-btn-add-first-row').off('click').on('click', async function(e) {");
+    const btnBody = src.slice(btnA, findBlockEnd(src, src.indexOf('{', btnA + 60)));
+    ok(/await insertBlankRow\(/.test(btnBody), '空表「新增一行」按钮走 insertBlankRow');
+    const a = anchorIndex(src, 'const insertBlankRow = async (tableKey, tableName) => {');
+    const bodyStart = src.indexOf('{', a + 'const insertBlankRow = async (tableKey, tableName) =>'.length);
     const bodyEnd = findBlockEnd(src, bodyStart);
     const body = src.slice(bodyStart + 1, bodyEnd - 1);
     for (const allowed of [false, true]) {
