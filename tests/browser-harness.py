@@ -480,4 +480,43 @@ with sync_playwright() as p:
         check(f'T0 no page errors (ST phone layout {where})', not errs, '; '.join(errs)[:200])
         b.close()
 
+    # T20 (V17.8.4, 移植 Crino V17.7.7): 关掉聊天回到首页。ST 的欢迎页用 makeFirst 抢在其他 CHAT_CHANGED
+    # 监听之前往 chat[] 塞一条非用户、非系统的助手欢迎语；数据库随后看到 chat[] 非空，不清表，
+    # 仍留着上一个聊天的数据并通知。旧代码会把仪表盘和行动选项挂到首页的欢迎语下面。
+    CLOSE_CHAT = """() => { window.__chat = undefined;
+        document.querySelector('#chat').innerHTML = '<div class="mes" mesid="0" is_user="false" is_system="false"><div class="mes_block"><span class="name_text">Assistant</span><div class="mes_text">welcome</div></div></div>'
+          + '<div class="mes smallSysMes" mesid="1" is_user="false" is_system="true"><div class="mes_block"><div class="mes_text">prompt</div></div></div>';
+        window.__stChat = [{ name: 'Assistant', mes: 'welcome', is_user: false, is_system: false, send_date: 'w', extra: { type: 'assistant_message' } },
+                           { name: 'System', mes: 'prompt', is_user: false, is_system: true, send_date: 'p' }];
+        (listeners.chat_changed || []).forEach(f => f(undefined)); window.__notify(); }"""
+    REOPEN_CHAT = """() => { window.__chat = 'A';
+        document.querySelector('#chat').innerHTML = '<div class="mes" mesid="0" is_user="true"><div class="mes_block"><div class="mes_text">hi</div></div></div>'
+          + '<div class="mes" mesid="1" is_user="false"><div class="mes_block"><span class="name_text">Bot</span><div class="mes_text">hello</div></div></div>';
+        window.__stChat = [{ is_user: true, mes: 'hi', send_date: 'u1' }, { is_user: false, mes: 'hello', send_date: 'a2' }];
+        (listeners.chat_changed || []).forEach(f => f('A')); window.__notify(); }"""
+    embeds = "() => ({ dash: document.querySelectorAll('#chat .acu-embedded-dashboard-container').length, opts: document.querySelectorAll('#chat .acu-embedded-options-container').length })"
+    b, pg, errs = boot(p, {'showDashboard': True, 'dashboardPosition': 'embedded', 'showOptionPanel': True}, before_mock=FLOAT_CHAT, pre=FLOAT_OPTS)
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(500)
+    before = pg.evaluate(embeds)
+    pg.evaluate(CLOSE_CHAT); pg.wait_for_timeout(900)
+    home = pg.evaluate(embeds)
+    check('T20 home page after closing the chat: no dashboard / options on the welcome message',
+          before == {'dash': 1, 'opts': 1} and home == {'dash': 0, 'opts': 0}, f'before={before} home={home}')
+    pg.evaluate(REOPEN_CHAT); pg.wait_for_timeout(900)
+    back = pg.evaluate(embeds)
+    check('T20 reopening a chat brings the dashboard back', back['dash'] == 1, f'back={back}')
+    check('T0 no page errors (home page run)', not errs, '; '.join(errs)[:200])
+    b.close()
+    b, pg, errs = boot(p, {'floatBall': True, 'showOptionPanel': True}, wait_state='attached', before_mock=FLOAT_CHAT, pre=FLOAT_OPTS)
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+    dot_before = pg.evaluate(ball_box)['dot']
+    pg.evaluate(CLOSE_CHAT); pg.wait_for_timeout(900)
+    dot_home = pg.evaluate(ball_box)['dot']
+    pg.mouse.click(*[pg.evaluate(ball_box)[k] for k in ('x', 'y')]); pg.wait_for_timeout(300)
+    views = [i['v'] for i in pg.evaluate(subs)]
+    check('T20 float form on the home page: no option dot, no option sub-ball', dot_before and not dot_home and 'options' not in views,
+          f'dot {dot_before}->{dot_home} subs={views}')
+    check('T0 no page errors (home page float run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
 print(f'\n{sum(results)}/{len(results)} passed')

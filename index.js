@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.8.3'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.8.4'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -3511,14 +3511,30 @@ ${allTableNames.map(tName => {
     // chat[i].extra._acu_original_content（随聊天持久化，上游 9.2.4 与 rebuild 9.1.1 同式）。
     // 以嵌入目标楼（DOM 最新 AI 楼）的 mesid 为准查该楼数据：ST 中 mesid=当前聊天数组下标，
     // 与 getContext().chat 同源；楼不对/原文与现文相同/标记错帧则不显。
+    // 首页（关掉聊天后 / 启动后还没进聊天）：宿主的欢迎页会往 chat[] 塞一条非用户、非系统的
+    // 「助手欢迎语」，形态与 AI 楼无异，却不属于任何聊天；此时 DB 因 chat[] 非空也不清表，
+    // 还留着上一个聊天的数据。故没有打开的聊天时一律视为「没有楼层」，选项/仪表盘/原文框都不挂。
+    // 宿主没有 getCurrentChatId 时视为有聊天（保持旧行为）。
+    const isNoChatOpen = (ctx) => {
+        try {
+            if (!ctx || typeof ctx.getCurrentChatId !== 'function') return false;
+            const id = ctx.getCurrentChatId();
+            return id === undefined || id === null || id === '';
+        } catch (_) { return false; }
+    };
+    const getHostCtx = () => {
+        const w = window.parent || window;
+        const ST = w.SillyTavern || window.SillyTavern;
+        return ST && typeof ST.getContext === 'function' ? ST.getContext() : null;
+    };
     const getHostChat = () => {
         try {
-            const w = window.parent || window;
-            const ST = w.SillyTavern || window.SillyTavern;
-            const ctx = ST && typeof ST.getContext === 'function' ? ST.getContext() : null;
-            return ctx && Array.isArray(ctx.chat) ? ctx.chat : null;
+            const ctx = getHostCtx();
+            if (!ctx || !Array.isArray(ctx.chat)) return null;
+            return isNoChatOpen(ctx) ? [] : ctx.chat;
         } catch (_) { return null; }
     };
+    const hostHasNoChatOpen = () => { try { return isNoChatOpen(getHostCtx()); } catch (_) { return false; } };
 
     const getReplacedInfoForMesid = (mesid, chat) => {
         if (!Array.isArray(chat) || !chat.length) return null;
@@ -3538,6 +3554,7 @@ ${allTableNames.map(tName => {
     // 与 getEmbeddedTargetBlock 同过滤的可见 AI 楼枚举（虚拟化下只含当前挂载的楼，滚回来的楼由 handleChatMutation 补挂）
     const collectAiMessageFloors = () => {
         const { $ } = getCore();
+        if (hostHasNoChatOpen()) return [];
         return $('#chat > .mes').get()
             .filter(isEmbeddableAiMes)
             .map((el) => ({ $block: blockOfMes($(el)), mesid: el.getAttribute('mesid') }));
@@ -4343,6 +4360,7 @@ ${allTableNames.map(tName => {
     };
     const getEmbeddedTargetBlock = () => {
         const { $ } = getCore();
+        if (hostHasNoChatOpen()) return null; // 首页的助手欢迎语不是楼层（见 isNoChatOpen）
         if (detectTTBounded()) {
             const mesid = getLatestAiMesidFromChat();
             if (mesid === null) return null;

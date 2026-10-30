@@ -157,6 +157,13 @@ INJECTIONS = [
     ('该藏时不移除已挂的选项', '            if ($opts.length) $opts.remove();\n', '', 1),
     ('渲染不经归属门控（= 修复前的按钮生成条件）',
      'optionTables.length > 0 && shouldShowOptions()', 'optionTables.length > 0', 1),
+    # ── 第八批：首页（关掉聊天后）助手欢迎语被当成 AI 楼（本 fork V17.8.4，移植自 Crino 上游 V17.7.7 的用户实报）──
+    ('首页仍返回欢迎页的 chat[]（选项归属到欢迎语）',
+     'return isNoChatOpen(ctx) ? [] : ctx.chat;', 'return ctx.chat;', 1),
+    ('嵌入目标不判首页（仪表盘/选项挂到欢迎语上）',
+     '        if (hostHasNoChatOpen()) return null; // 首页的助手欢迎语不是楼层（见 isNoChatOpen）\n', '', 1),
+    ('「全部 AI 楼」范围不判首页', '        if (hostHasNoChatOpen()) return [];\n', '', 1),
+    ('没有聊天 ID 不再视为首页', "return id === undefined || id === null || id === '';", 'return false;', 1),
 ]
 
 

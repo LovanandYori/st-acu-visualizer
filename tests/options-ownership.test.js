@@ -222,4 +222,67 @@ section('[O-7] renderInterface 接线（源码顺序检查，非行为测试）'
   ok(!/hideOptionsUntilUpdate|hiddenOptionsAnchor/.test(src), '旧的「换楼即解除隐藏」状态已彻底移除（防新旧两套规则并存）');
 }
 
+section('[O-8] 首页（关掉聊天后）：助手欢迎语不是楼层');
+{
+  // 宿主关聊天后欢迎页先于其他 CHAT_CHANGED 监听执行，往 chat[] 塞一条非用户、非系统的助手欢迎语；
+  // DB 因 chat[] 非空不清表，仍留着上一个聊天的选项 → 用户实报「首页出现选项」。
+  const hostDecl = {
+    noChat: sliceConstFn(src, 'const isNoChatOpen = (ctx) => {', 'isNoChatOpen'),
+    ctx: sliceConstFn(src, 'const getHostCtx = () => {', 'getHostCtx'),
+    chat: sliceConstFn(src, 'const getHostChat = () => {', 'getHostChat'),
+    has: sliceConstFn(src, 'const hostHasNoChatOpen = () => {', 'hostHasNoChatOpen'),
+    aiMesid: sliceConstFn(src, 'const getLatestAiMesidFromChat = () => {', 'getLatestAiMesidFromChat'),
+    target: sliceConstFn(src, 'const getEmbeddedTargetBlock = () => {', 'getEmbeddedTargetBlock'),
+    floors: sliceConstFn(src, 'const collectAiMessageFloors = () => {', 'collectAiMessageFloors'),
+  };
+  const greeting = { name: 'Assistant', mes: 'hi', is_user: false, is_system: false, send_date: 'g', extra: { type: 'assistant_message' } };
+  const welcomePrompt = { name: 'System', mes: 'prompt', is_user: false, is_system: true, send_date: 'p' };
+  const mount = (host) => {
+    const domMes = [{ tag: 'greeting-mes' }];
+    const $ = (sel) => {
+      if (sel === '#chat > .mes') return { get: () => domMes };
+      return { length: 1, find: () => ({ length: 1 }), closest: () => ({ attr: () => '0' }) };
+    };
+    const ST = { getContext: () => host };
+    return vm.runInNewContext(buildScope([
+      'const getCore = () => ({ $: __deps.$ });',
+      'const detectTTBounded = () => __deps.bounded;',
+      'const isEmbeddableAiMes = () => true;', // DOM 上欢迎语与 AI 楼无异
+      'const blockOfMes = () => ({ block: true });',
+      "let lastOptionDataCheck = '';", 'let optionsOwnerFloorKey = null;',
+      'let hostGenerating = false;', 'let optionsSendSuppressedKey = null;',
+      hostDecl.noChat, hostDecl.ctx, hostDecl.chat, hostDecl.has, hostDecl.aiMesid, hostDecl.target, hostDecl.floors,
+      decl.latestKey, decl.note, decl.show,
+    ], `{ target: getEmbeddedTargetBlock, floors: collectAiMessageFloors, note: noteOptionDataChange,
+         show: shouldShowOptions, latest: getLatestFloorKey, chat: getHostChat }`),
+      { __deps: { $, bounded: !!host.__bounded }, window: { SillyTavern: ST }, Array, String, Number, Object, console });
+  };
+
+  for (const bounded of [false, true]) {
+    const tag = bounded ? '（虚拟化）' : '（非虚拟化）';
+    const home = { chat: [greeting, welcomePrompt], getCurrentChatId: () => undefined, __bounded: bounded };
+    const h = mount(home);
+    h.note('上一个聊天残留的选项');
+    ok(!h.show(), '首页 + DB 残留选项 → 不显示选项' + tag);
+    ok(h.target() === null, '首页 → 没有可挂的目标楼（仪表盘/原文框也不挂）' + tag);
+    eq(h.floors().length, 0, '首页 → 「全部 AI 楼」范围也为空' + tag);
+  }
+  {
+    const open = { chat: [greeting], getCurrentChatId: () => 'chat-1' };
+    const h = mount(open);
+    h.note('S');
+    ok(h.show() && h.target() !== null, '打开了聊天（即便首楼是同样形态的开场白）→ 照常显示');
+  }
+  {
+    const old = { chat: [greeting] }; // 宿主没有 getCurrentChatId
+    const h = mount(old);
+    h.note('S');
+    ok(h.show(), '宿主不提供 getCurrentChatId → 保持旧行为');
+  }
+  {
+    const h = mount({ chat: [greeting], getCurrentChatId: () => { throw new Error('boom'); } });
+    ok(Array.isArray(h.chat()) && h.chat().length === 1, 'getCurrentChatId 抛错 → 按有聊天处理，不吞掉聊天数据');
+  }
+}
+
 report('options-ownership');

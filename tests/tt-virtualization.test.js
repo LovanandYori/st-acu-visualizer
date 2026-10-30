@@ -132,10 +132,10 @@ section('[V-1] 只有 .mes 增删才算楼层变动');
 // 一段聊天：0=AI 1=用户 2=AI 3=用户（末楼）
 const CHAT = [{ name: 'A' }, { is_user: true }, { name: 'A' }, { is_user: true }];
 const targetScope = (doc, { bounded, chat }) => run(
-  [fwd('getCore'), fwd('detectTTBounded'), fwd('getHostChat'),
+  [fwd('getCore'), fwd('detectTTBounded'), fwd('getHostChat'), fwd('hostHasNoChatOpen'),
     decl.isEmbeddable, decl.blockOf, decl.latestAi, decl.target, decl.mesidOf],
   '{ target: getEmbeddedTargetBlock, mesidOf: mesidOfBlock }',
-  { getCore: () => ({ $: makeJq(doc) }), detectTTBounded: () => bounded, getHostChat: () => chat },
+  { getCore: () => ({ $: makeJq(doc) }), detectTTBounded: () => bounded, getHostChat: () => chat, hostHasNoChatOpen: () => false },
 );
 
 section('[V-2] 最新 AI 楼按 chat[] 认定；没挂载就返回 null');

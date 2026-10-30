@@ -36,8 +36,8 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 | 套件 | 守什么 | 关键手法 |
 |---|---|---|
 | `extract-self` | **抽取器自身**：花括号配平（正则字面量 / 模板串插值 / 注释里的括号）、未闭合块注释不死循环、锚点不唯一必须报错、`sliceDecl` 不吞下一条声明 | 抽取器是全套的地基：配平错一个括号就会抽错代码，而断言仍全绿 |
-| `tt-host-coupling` | **宿主契约**（TT 2.3.0）：消息选择器必须是 `#chat` 直属子 `.mes`（同 `directMessages()` 的 `:scope > .mes`）；`detectTTBounded` 三条路径；bounded 下不得直挂 `#chat`（那是宿主唯一真实 fault 入口 `unknown direct child`）；不复用宿主选择器类名（`mes_text` / `mesIDDisplay`） | 假 DOM 证明 `:scope > .mes` 与后代选择器会分叉；`detectTTBounded` 真跑三条路径（含抛错 fail-safe） |
-| `options-ownership` | **行动选项归属**（V17.7.5 用户定的规则：当且仅当最新楼层是 AI 楼、且这一楼有自己的选项时才显示）：最新楼层身份（跳过隐藏/系统楼、用户楼为 null、含 swipe_id 与 send_date）；生成中的数据变化（DB 回退到上一楼）不认领；用户实报场景逐步回放；滑动/滑回/删楼重生成；quiet/dryRun 不算前台生成；停止生成撤销「发送时先藏」；拿不到 chat 时保持旧行为 | 真实的 `trySubscribeFloorEvents` 订阅到假事件总线，按宿主事件顺序回放；假计时器异步排队（同步执行会掩盖「已排程」标记清不掉）。O-7 是源码顺序检查（`renderInterface` 体量太大无法整体进 vm），如实标注 |
+| `tt-host-coupling` | **宿主契约**（TT 2.4.0；fault 入口与 2.3.0 逐字一致）：消息选择器必须是 `#chat` 直属子 `.mes`（同 `directMessages()` 的 `:scope > .mes`）；`detectTTBounded` 三条路径；bounded 下不得直挂 `#chat`（那是宿主唯一真实 fault 入口 `unknown direct child`）；不复用宿主选择器类名（`mes_text` / `mesIDDisplay`） | 假 DOM 证明 `:scope > .mes` 与后代选择器会分叉；`detectTTBounded` 真跑三条路径（含抛错 fail-safe） |
+| `options-ownership` | **行动选项归属**（V17.7.5 用户定的规则：当且仅当最新楼层是 AI 楼、且这一楼有自己的选项时才显示）：最新楼层身份（跳过隐藏/系统楼、用户楼为 null、含 swipe_id 与 send_date）；生成中的数据变化（DB 回退到上一楼）不认领；用户实报场景逐步回放；滑动/滑回/删楼重生成；quiet/dryRun 不算前台生成；停止生成撤销「发送时先藏」；拿不到 chat 时保持旧行为；**首页（没有打开的聊天）时宿主塞进 chat[] 的助手欢迎语不算楼层**（本 fork V17.8.4，移植自 Crino 上游 V17.7.7 的用户实报） | 真实的 `trySubscribeFloorEvents` 订阅到假事件总线，按宿主事件顺序回放；假计时器异步排队（同步执行会掩盖「已排程」标记清不掉）。O-7 是源码顺序检查（`renderInterface` 体量太大无法整体进 vm），如实标注 |
 | `tt-virtualization` | **虚拟化下嵌入块的生命周期**（不 fault 之后面板还对不对）：只有 `.mes` 增删算楼层变动、spacer 重插不算；「最新 AI 楼」按 `chat[]` 认定、未挂载返回 null；楼层重建后补挂（缺块才重渲染、同目标只补一次、选项按归属规则判断要不要补）；补挂重渲染后不再拿旧 wrapper 归位；嵌入块插在同楼主面板之上；`closePanel` 虚拟化下不写回 scrollTop | 自带极简假 DOM + 假 jQuery，真跑 `handleChatMutation` 等真实源码；V-2 含「DOM 倒序法会挑中历史楼」对照组 |
 | `write-identity` | 身份闸门的**锚点/基准分工**（锚点=用户所见取缓存、基准=DB 现状取活引用）；row_id/表头不符→拒；空串表头参与比对；catch 必须 fail-closed；脏数据 fail-closed；活引用不可用时回退 | 活引用与缓存克隆是**两个不同对象**；含一个「锚点也读活引用则闸门恒过」的对照组，证明测试有区分力 |
 | `row-edit-two-phase` | 整行编辑先校验后落笔：空表头列、与 DB 提交选项同名的列一律拒提交并说明；提交键用原始表头；身份闸门基准取活引用 | 假 `dialog` 提供 `find('textarea').each`；live/cache 分离 |
@@ -53,7 +53,7 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 
 ## 注入矩阵（`sabotage-matrix.py`）
 
-**53 处真实缺陷注入，53 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
+**57 处真实缺陷注入，57 处全部被至少一个套件发现。** 这份矩阵是本仓测试有效性的唯一客观证据；
 改动测试或生产代码后请重跑，退出码非 0 表示「有注入无人发现」**或**「有注入锚点已失效」。
 
 <details>
@@ -154,6 +154,18 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
 </details>
 
 <details>
+<summary>展开（第八批：V17.8.4（移植 Crino 上游 V17.7.7）首页助手欢迎语被当成 AI 楼，用户实报「关掉聊天后首页还有选项」）</summary>
+
+```
+✓ 首页仍返回欢迎页的 chat[]（选项归属到欢迎语）                → options-ownership
+✓ 嵌入目标不判首页（仪表盘/选项挂到欢迎语上）                  → options-ownership
+✓ 「全部 AI 楼」范围不判首页                                   → options-ownership
+✓ 没有聊天 ID 不再视为首页                                     → options-ownership
+```
+
+</details>
+
+<details>
 <summary>展开（第三批：V17.7.2 因 ST 库 1.0.0 引入的回归）</summary>
 
 ```
@@ -185,7 +197,7 @@ python tests/sabotage-matrix.py                            # 注入矩阵：验�
   若该模式在 TT 生产启用，闸门复验的对象与 DB 写库解析下标的对象可能不是同一个。
   未确认该模式是否启用，暂记为待查项。
 - **虚拟化的真实宿主行为**（TanStack 测量、spacer 重插时机、楼层重建）没有进 vm：
-  `tt-virtualization` 用的是按宿主源码（TT 2.3.0 `chat-dom-adapter.js` / `bounded-chat-surface.js`）
+  `tt-virtualization` 用的是按宿主源码（TT 2.3.0 / 2.4.0 两版逐字一致的 `chat-dom-adapter.js` / `bounded-chat-surface.js`）
   归纳出的 MutationRecord 形状，证明的是「前端对这些输入的反应」，不是「宿主一定这样发」。
   真机行为仍需在 TT 上开虚拟化实测。
 - **选项归属的三个已知边界**（`options-ownership` 按设计钉住或未覆盖）：
