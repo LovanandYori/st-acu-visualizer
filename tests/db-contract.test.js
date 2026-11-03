@@ -188,8 +188,8 @@ if (DB_PATHS.length === 0) {
 
     section(`[D-6] ${name}：parseMutationOptions_ACU 从数据对象的键里读提交选项`);
     {
-      const head = where(/function parseMutationOptions_ACU[\s\S]{0,1200}?return\s*\{\s*skipChatSave,\s*skipNotify\s*\}/m);
-      ok(!!head, 'parseMutationOptions_ACU 存在且返回 { skipChatSave, skipNotify }', head || ''); note(head);
+      const head = where(/function parseMutationOptions_ACU[\s\S]{0,1200}?return\s*\{\s*skipChatSave,\s*skipNotify\s*[,}]/m);   // 1.3.4 起后面多了可选的 awaitFrontendReadback 展开
+      ok(!!head, 'parseMutationOptions_ACU 存在且返回 { skipChatSave, skipNotify, ... }', head || ''); note(head);
       const isImport = where(/parseMutationOptions_ACU[\s\S]{0,900}?rowData\?\.isImportMode/m);
       ok(!!isImport, 'rowData.isImportMode 被读取（前端保留名列守卫的直接依据）', isImport || ''); note(isImport);
       const silent = where(/parseMutationOptions_ACU[\s\S]{0,900}?rowData\?\.skipNotify[\s\S]{0,200}?rowData\?\.silent/m);

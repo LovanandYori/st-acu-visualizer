@@ -164,6 +164,8 @@ INJECTIONS = [
      '        if (hostHasNoChatOpen()) return null; // 首页的助手欢迎语不是楼层（见 isNoChatOpen）\n', '', 1),
     ('「全部 AI 楼」范围不判首页', '        if (hostHasNoChatOpen()) return [];\n', '', 1),
     ('没有聊天 ID 不再视为首页', "return id === undefined || id === null || id === '';", 'return false;', 1),
+    # ── 第九批：老行没补齐新列（本 fork V17.8.5，代码审查发现）──
+    ('行数组不按表头补齐（新列看不到）', '        if (!(headerLen > row.length)) return row;', '        return row;', 1),
 ]
 
 

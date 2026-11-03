@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.8.4'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.8.5'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -137,6 +137,8 @@
     // MESSAGE_UPDATED → 被替换正文框轻量重检的防抖句柄
     let repBoxDebounce = null;
     let isEditingOrder = false;
+    // 排序模式里到达的数据通知先记下，退出排序模式时补一次刷新（否则退出后一直显示填表前的旧表）
+    let updateMissedWhileOrdering = null;
     // 「点面板外自动收起」的原生监听（见 bindEvents），重绑前先移除旧的
     let autoCloseListener = null;
     let autoCloseListenerDoc = null;
@@ -149,6 +151,8 @@
     let chatRoRafPending = false;
     let chatObserversReady = false;
     let lastObservedChatEl = null;
+    // 行动选项折叠状态的本页内存副本：浏览器存储满时 setItem 会抛错，靠它让折叠/展开仍然按点击切换
+    let optCollapseMem = null;
     let isCollapsed = (() => { try { return localStorage.getItem(STORAGE_KEY_UI_COLLAPSE) === 'true'; } catch (e) { return false; } })();
     let globalScrollTop = 0;
     let currentPage = 1;
@@ -215,7 +219,7 @@
             // 不再让 _suppressNext 吞掉 DB 的填表完成通知：前一次保存的 2 秒抑制窗口
             // 会挡住 DB 在填表结束时发的 _notifyTableUpdate，导致表格更新了前端没刷新。
             // 填表流程的更新通知应始终放行。
-            if (isEditingOrder) return;
+            if (isEditingOrder) { updateMissedWhileOrdering = { meta: meta || null }; return; }
             // 批量删循环期间的通知直接吞掉：循环结束会统一全量重拉，避免中间态被回灌
             if (bulkOpActive) return;
             // DB 9.0 通知第二参 meta.persisted=false 表示本次更新只改了运行时内存、
@@ -2490,6 +2494,16 @@
         return { message, text: lines.join('\n'), warn: !!(api && audit.tables && !audit.rows && floors) };
     };
 
+    // 在数据库里给表加了新列后，老的行数组常常没补齐新列（选项面板那边早就按表头列数遍历了）。
+    // 卡片、详情、整行编辑、仪表盘按行数组长度遍历的话，新列既看不到也点不到，这里按表头补齐空格。
+    const padRowToHeaders = (row, headerLen) => {
+        if (!Array.isArray(row)) return [];
+        if (!(headerLen > row.length)) return row;
+        const out = row.slice();
+        for (let i = row.length; i < headerLen; i++) out.push('');
+        return out;
+    };
+
     const processJsonData = (json) => {
         const tables = {};
         if (!json || typeof json !== 'object') return {};
@@ -3242,7 +3256,7 @@ ${allTableNames.map(tName => {
             if (activeTab === tName) renderInterface(false);
         });
         dialog.find('.acu-visibility-toggle').on('click', function() {
-            const tName = $(this).data('table');
+            const tName = $(this).attr('data-table');
             let currentList = getHiddenTables();
             if (currentList.includes(tName)) {
                 currentList = currentList.filter(n => n !== tName);
@@ -3434,8 +3448,11 @@ ${allTableNames.map(tName => {
             } else {
                 const STORAGE_KEY_OPT_COLLAPSE = 'acu_opt_collapse_state';
                 let isCollapsed;
-                try { isCollapsed = localStorage.getItem(STORAGE_KEY_OPT_COLLAPSE) === 'true'; }
-                catch (e) { isCollapsed = false; }
+                if (optCollapseMem !== null) isCollapsed = optCollapseMem;
+                else {
+                    try { isCollapsed = localStorage.getItem(STORAGE_KEY_OPT_COLLAPSE) === 'true'; }
+                    catch (e) { isCollapsed = false; }
+                }
 
                 const $container = $('<div class="acu-embedded-options-container" style="margin-top: 6px; width: 100%; clear: both;"></div>');
                 $container.addClass(themeClass).attr('style', $container.attr('style') + '; ' + cssVars);
@@ -3485,17 +3502,21 @@ ${allTableNames.map(tName => {
 
                 $header.on('click', function(e) {
                     e.stopPropagation();
-                    const currentIsCollapsed = localStorage.getItem(STORAGE_KEY_OPT_COLLAPSE) === 'true';
+                    let currentIsCollapsed = optCollapseMem;
+                    if (currentIsCollapsed === null) {
+                        try { currentIsCollapsed = localStorage.getItem(STORAGE_KEY_OPT_COLLAPSE) === 'true'; }
+                        catch (_) { currentIsCollapsed = false; }
+                    }
 
                     if (currentIsCollapsed) {
                         $wrapper.css({ 'max-height': '1000px', 'opacity': '1', 'padding': '8px' });
                         $header.css({ 'border-radius': '12px 12px 0 0', 'margin-bottom': '-1px' });
-                        localStorage.setItem(STORAGE_KEY_OPT_COLLAPSE, 'false');
                     } else {
                         $wrapper.css({ 'max-height': '0', 'opacity': '0', 'padding': '0' });
                         $header.css({ 'border-radius': '12px', 'margin-bottom': '0' });
-                        localStorage.setItem(STORAGE_KEY_OPT_COLLAPSE, 'true');
                     }
+                    optCollapseMem = !currentIsCollapsed;
+                    try { localStorage.setItem(STORAGE_KEY_OPT_COLLAPSE, String(optCollapseMem)); } catch (_) { /* 存储满：本页内存里仍记着 */ }
                 });
 
                 appendAboveWrapper($target, $container);
@@ -3816,6 +3837,9 @@ ${allTableNames.map(tName => {
             const dashPos = isFloatMode(config) ? 'panel' : config.dashboardPosition;
             if (currentTabName === TAB_DASHBOARD && dashPos !== 'panel') currentTabName = null;
             if (currentTabName && currentTabName !== TAB_DASHBOARD && !tables[currentTabName]) currentTabName = null;
+            // 正开着的表被隐藏、或关掉了仪表盘：导航栏里已没有对应按钮，翻页/搜索/多选都读不到当前表，一并收起
+            if (currentTabName && currentTabName !== TAB_DASHBOARD && hiddenTables.includes(currentTabName)) currentTabName = null;
+            if (currentTabName === TAB_DASHBOARD && !showDash) currentTabName = null;
 
             let colorVal = HIGHLIGHT_COLORS[config.highlightColor];
         if (!colorVal && config.highlightColor && String(config.highlightColor).startsWith('#')) {
@@ -4051,7 +4075,11 @@ ${allTableNames.map(tName => {
 
         const findKey = (keyword, exact = false) => {
             if (!keyword) return null;
-            return Object.keys(tables).find(k => exact ? k === keyword : k.includes(keyword));
+            // 先找同名表：卡槽里存的多是设置里选的完整表名，只做包含匹配的话
+            // 「任务表」会先命中排在前面的「主线任务表」
+            const keys = Object.keys(tables);
+            if (keys.includes(keyword)) return keyword;
+            return exact ? undefined : keys.find(k => k.includes(keyword));
         };
 
         let _cfgChanged = false;
@@ -4105,7 +4133,7 @@ ${allTableNames.map(tName => {
             let itemsHtml = '';
             const colsToShow = (cfg.showCols && cfg.showCols.length > 0) ? cfg.showCols.map(Number) : null;
 
-            targetRow.forEach((cell, idx) => {
+            padRowToHeaders(targetRow, headers.length).forEach((cell, idx) => {
                 if (idx === 0) return; 
                 if (colsToShow && !colsToShow.includes(idx)) return;
 
@@ -5278,6 +5306,7 @@ const checkRowChanged = (realIdx, row) => {
              const cardTitle = row[titleColIndex] || '未命名';
             const showDefaultIndex = (titleColIndex === 1);
             const isRowNew = currentDiffMap.has(`${tableName}-row-${realIndex}`);
+            // 整行新增：高亮标在卡片标题上（之前算出来了却没用上，新行只会被挪到最前、不会高亮）
             const rowClass = isRowNew && config.highlightNew ? 'acu-highlight-changed' : '';
             const rowKey = `${tableName}-${realIndex}`;
             const isSelected = selectedRows.has(rowKey);
@@ -5288,11 +5317,11 @@ const checkRowChanged = (realIdx, row) => {
                         <div class="acu-card-header">
                             <input type=\"checkbox\" class=\"acu-card-checkbox\" data-row-key=\"${escapeHtml(rowKey)}\" ${isSelected ? 'checked' : ''} style=\"${isMultiSelectMode ? 'visibility:visible;' : 'visibility:hidden;'}\">
                             <span class="acu-card-index">${showDefaultIndex ? '#' + (realIndex + 1) : ''}</span>
-                            <span class="acu-cell acu-editable-title" data-key="${escapeHtml(tableData.key)}" data-tname="${escapeHtml(tableName)}" data-row="${realIndex}" data-col="${titleColIndex}" title="点击编辑标题">${escapeHtml(cardTitle)}</span>
+                            <span class="acu-cell acu-editable-title ${rowClass}" data-key="${escapeHtml(tableData.key)}" data-tname="${escapeHtml(tableName)}" data-row="${realIndex}" data-col="${titleColIndex}" title="点击编辑标题">${escapeHtml(cardTitle)}</span>
                         </div>
                         <div class="acu-card-body">`;
             let gridHtml = ''; let fullHtml = '';
-            row.forEach((cell, cIdx) => {
+            padRowToHeaders(row, tableData.headers.length).forEach((cell, cIdx) => {
                 if (cIdx > 0 && cIdx !== titleColIndex) {
                     const headerName = headers[cIdx - 1] || `属性${cIdx}`;
                     // 保留 cellStr 绑定：下方 grid/full 视图分支用未 trim 的 cellStr.length > 50
@@ -5432,13 +5461,17 @@ const checkRowChanged = (realIdx, row) => {
                 if (!inEditingContext() && !catchupTimer) {
                     const freshRaw = getTableData(true);
                     if (freshRaw && lastTableDataRefreshed) {
+                        // 数据在没有通知的情况下变了（工作台追平等）：按整次刷新处理——重算高亮，
+                        // 并整体重绘（嵌入仪表盘/选项也换成新数据，仪表盘胶囊上的行号才和新表对得上）。
+                        // 只在这里局部换表的话，高亮还标在旧行号上，下一次 renderInterface(false) 也不会再重算。
                         try {
-                            effectiveTables = processJsonData(freshRaw);
-                            // 同步更新闭包持有的表快照，并失效可能由旧数据生成的搜索结果。
-                            tables = effectiveTables;
+                            currentDiffMap = generateDiffMap(freshRaw);
                             searchCacheKey = '';
                             searchCacheResult = null;
-                        } catch (_) { effectiveTables = tables; }
+                            saveActiveTabState(tableName);
+                            renderInterface(false);
+                            return;
+                        } catch (e) { console.warn('[ACU-UI] 切表时刷新失败，按旧数据显示:', e); }
                     }
                 }
             } catch (_) {}
@@ -5465,7 +5498,7 @@ const checkRowChanged = (realIdx, row) => {
         $('.acu-nav-btn').off('click').on('click', function(e) {
             e.stopPropagation(); 
             if (isEditingOrder) return;
-            const tableName = $(this).data('table');
+            const tableName = $(this).attr('data-table');
             if ($(this).hasClass('active')) { closePanel(); } else { switchTab(tableName); }
         });
         
@@ -5485,12 +5518,12 @@ const checkRowChanged = (realIdx, row) => {
                 const $b = $(this);
                 if ($b.prop('disabled')) return;
                 $b.prop('disabled', true);
-                try { await insertBlankRow(String($b.data('key')), String($b.data('tname'))); }
+                try { await insertBlankRow(String($b.data('key')), String($b.attr('data-tname'))); }
                 finally { $b.prop('disabled', false); }
             });
              $('.acu-dash-interactive').off('click').on('click', function(e) {
                 e.stopPropagation();
-                const tableName = $(this).data('tname');
+                const tableName = $(this).attr('data-tname');
                 const rowIdx = $(this).data('row'); const colIdx = $(this).data('col');
                 if (tableName && tables[tableName]) {
                      const table = tables[tableName];
@@ -5517,7 +5550,7 @@ const checkRowChanged = (realIdx, row) => {
                 if (!p) return;
                 currentPage = p;
                 globalScrollTop = 0;
-                const tableName = $('.acu-nav-btn.active').data('table');
+                const tableName = $('.acu-nav-btn.active').attr('data-table');
                 if (tableName && tables[tableName]) {
                     $('#acu-data-area').html(renderTableContent(tables[tableName], tableName));
                     bindDataAreaEvents();
@@ -5525,39 +5558,8 @@ const checkRowChanged = (realIdx, row) => {
             });
         };
         
-        const bindDataAreaEvents = () => {
-            $('#acu-btn-close').off('click').on('click', function(e) { e.stopPropagation(); closePanel(); });
-
-            $('#acu-btn-multiselect').off('click').on('click', function(e) {
-                e.stopPropagation();
-                isMultiSelectMode = true;
-                const tableName = $('.acu-nav-btn.active').data('table');
-                if (tableName && tables[tableName]) {
-                    $('#acu-data-area').html(renderTableContent(tables[tableName], tableName));
-                    bindDataAreaEvents();
-                }
-            });
-
-            $('#acu-btn-exit-multiselect').off('click').on('click', function(e) {
-                e.stopPropagation();
-                isMultiSelectMode = false;
-                const tableName = $('.acu-nav-btn.active').data('table');
-
-                Array.from(selectedRows.values()).forEach(item => {
-                    if (item.tableName === tableName) {
-                        pendingDeletes.delete(`${tableName}-row-${item.rowIndex}`);
-                        pendingDeleteRowIds.delete(`${tableName}-row-${item.rowIndex}`);
-                    }
-                });
-
-                selectedRows.clear();
-                updateDynamicActionButton();
-                if (tableName && tables[tableName]) {
-                    $('#acu-data-area').html(renderTableContent(tables[tableName], tableName));
-                    bindDataAreaEvents();
-                }
-            });
-
+        // 多选：点卡片/勾选框。翻页、切多选、搜索后重建卡片时都要重新绑
+        const bindCardSelectEvents = () => {
             $('.acu-data-card').off('click').on('click', function(e) {
                 if (isMultiSelectMode) {
                     if (!$(e.target).is('.acu-card-checkbox')) {
@@ -5569,7 +5571,7 @@ const checkRowChanged = (realIdx, row) => {
             $('.acu-card-checkbox').off('change').on('change', function(e) {
                 e.stopPropagation();
                 const rowKey = $(this).data('row-key');
-                const tableName = $('.acu-nav-btn.active').data('table');
+                const tableName = $('.acu-nav-btn.active').attr('data-table');
                 const $card = $(this).closest('.acu-data-card');
                 const rowIndex = parseInt($card.find('.acu-editable-title').data('row'));
                 const key = $card.find('.acu-editable-title').data('key');
@@ -5604,6 +5606,42 @@ const checkRowChanged = (realIdx, row) => {
 
                 updateDynamicActionButton();
             });
+        };
+
+        const bindDataAreaEvents = () => {
+            $('#acu-btn-close').off('click').on('click', function(e) { e.stopPropagation(); closePanel(); });
+
+            $('#acu-btn-multiselect').off('click').on('click', function(e) {
+                e.stopPropagation();
+                isMultiSelectMode = true;
+                const tableName = $('.acu-nav-btn.active').attr('data-table');
+                if (tableName && tables[tableName]) {
+                    $('#acu-data-area').html(renderTableContent(tables[tableName], tableName));
+                    bindDataAreaEvents();
+                }
+            });
+
+            $('#acu-btn-exit-multiselect').off('click').on('click', function(e) {
+                e.stopPropagation();
+                isMultiSelectMode = false;
+                const tableName = $('.acu-nav-btn.active').attr('data-table');
+
+                Array.from(selectedRows.values()).forEach(item => {
+                    if (item.tableName === tableName) {
+                        pendingDeletes.delete(`${tableName}-row-${item.rowIndex}`);
+                        pendingDeleteRowIds.delete(`${tableName}-row-${item.rowIndex}`);
+                    }
+                });
+
+                selectedRows.clear();
+                updateDynamicActionButton();
+                if (tableName && tables[tableName]) {
+                    $('#acu-data-area').html(renderTableContent(tables[tableName], tableName));
+                    bindDataAreaEvents();
+                }
+            });
+
+            bindCardSelectEvents();
 
             $('#acu-btn-search-toggle').off('click').on('click', function(e) {
                 e.stopPropagation();
@@ -5631,7 +5669,7 @@ const checkRowChanged = (realIdx, row) => {
             // 大表（几千行纪要）上逐字重算会明显卡输入。180ms 足够连续输入合并成一次。
             let searchDebounceTimer = null;
             const runSearchRender = () => {
-                const tableName = $('.acu-nav-btn.active').data('table');
+                const tableName = $('.acu-nav-btn.active').attr('data-table');
                 if (!tableName || !tables[tableName]) return;
                 const fullHtml = renderTableContent(tables[tableName], tableName);
                 const $temp = $('<div>').html(fullHtml);
@@ -5641,7 +5679,11 @@ const checkRowChanged = (realIdx, row) => {
                 $temp.find('.acu-panel-content').contents().appendTo($dst);
                 const $dstTitle = $('.acu-panel-title').empty();
                 $temp.find('.acu-panel-title').contents().appendTo($dstTitle);
+                // 页码栏在内容区外面，也要换：搜到的结果页数和原表不同，清空搜索后也要把页码栏找回来
+                $('#acu-data-area .acu-panel-footer').remove();
+                $temp.children('.acu-panel-footer').insertAfter($dst);
                 bindDynamicContentEvents();
+                bindCardSelectEvents();
                 bindScrollFade($('.acu-panel-content, .acu-dash-container, .acu-dash-npc-grid'));
             };
             $('.acu-search-input').off('input').on('input', function() {
@@ -5662,7 +5704,7 @@ const checkRowChanged = (realIdx, row) => {
                 const $panel = $('#acu-data-area');
                 const startHeight = $panel.height();
                 const startY = e.clientY;
-                const tableName = $(handle).data('table');
+                const tableName = $(handle).attr('data-table');
                 
                 const onMove = function(moveE) {
                     const dy = moveE.clientY - startY;
@@ -5697,7 +5739,7 @@ const checkRowChanged = (realIdx, row) => {
                 e.preventDefault(); e.stopPropagation();
                 
                 const activeBtn = $('.acu-nav-btn.active');
-                const tableName = activeBtn.data('table');
+                const tableName = activeBtn.attr('data-table');
                 
                 if (tableName) {
                      const heights = getTableHeights();
@@ -5712,7 +5754,7 @@ const checkRowChanged = (realIdx, row) => {
             
             $('#acu-btn-switch-style').off('click').on('click', function(e) {
                 e.preventDefault(); e.stopPropagation();
-                const tableName = $(this).data('table');
+                const tableName = $(this).attr('data-table');
                 const styles = getTableStyles();
                 const current = styles[tableName] || 'list';
                 styles[tableName] = current === 'grid' ? 'list' : 'grid';
@@ -5830,7 +5872,7 @@ const checkRowChanged = (realIdx, row) => {
             updateDynamicActionButton();
         };
 
-        const toggleUI = () => { isCollapsed = !isCollapsed; localStorage.setItem(STORAGE_KEY_UI_COLLAPSE, isCollapsed); renderInterface(false); };
+        const toggleUI = () => { isCollapsed = !isCollapsed; try { localStorage.setItem(STORAGE_KEY_UI_COLLAPSE, isCollapsed); } catch (_) { /* 存储满：本页仍按新状态显示 */ } renderInterface(false); };
         $('#acu-btn-toggle').off('click').on('click', (e) => { e.stopPropagation(); if (isEditingOrder) return; if (isFloatMode()) { closeFloat(); return; } toggleUI(); });
         if (isCollapsed && !isFloatMode()) { $('.acu-nav-container').off('click').on('click', (e) => { e.stopPropagation(); toggleUI(); }); }
         
@@ -5844,7 +5886,7 @@ const checkRowChanged = (realIdx, row) => {
                 if (window.toastr) window.toastr.error('设置面板打开失败');
             }
         });
-        $('#acu-btn-cancel-mode').off('click').on('click', (e) => { e.stopPropagation(); isEditingOrder = false; renderInterface(false); });
+        $('#acu-btn-cancel-mode').off('click').on('click', (e) => { e.stopPropagation(); isEditingOrder = false; renderAfterOrderMode(); });
         $('#acu-btn-save-mode').off('click').on('click', (e) => { e.stopPropagation(); toggleOrderEditMode(); });
         $('#acu-btn-open-db').off('click').on('click', async function(e) {
             e.preventDefault(); e.stopPropagation();
@@ -5909,11 +5951,13 @@ const checkRowChanged = (realIdx, row) => {
                 for (let i = 0; i < maxTries; i++) {
                     const root = doc.getElementById('acu-app-v2') || doc;
                     const btn = findFn(root);
-                    if (btn && (!requireEnabled || !btn.disabled)) { btn.click(); return true; }
+                    if (btn && (!requireEnabled || !btn.disabled)) { btn.click(); return btn; }
                     await new Promise(r => setTimeout(r, 100));
                 }
-                return false;
+                return null;
             };
+            // 追平按钮文案：数据库 1.3（d27f04f）起改成「一键追平还没填的内容」，旧库是「一键追平所选表未填楼层」，两个都认。
+            const CATCHUP_LABELS = ['一键追平还没填的内容', '一键追平所选表未填楼层'];
 
             const runLegacyManualUpdate = async () => {
                 const api = core.getDB();
@@ -6023,9 +6067,9 @@ const checkRowChanged = (realIdx, row) => {
 
             // 3) 点「一键追平所选表未填楼层」；显式排除「执行手动填表」按钮（否则 includes 会误命中）
             //    追平按钮文案在忙时显示「追平中...」，此时 disabled，需等到非忙态可点。
-            const okCatch = await waitAndClick((rt) => findButtonByExactText(rt, ['一键追平所选表未填楼层'], ['执行手动填表']), 30, true);
+            const okCatch = await waitAndClick((rt) => findButtonByExactText(rt, CATCHUP_LABELS, ['执行手动填表']), 30, true);
             if (okCatch) {
-                if (window.toastr) window.toastr.info('已在数据库工作台静默全选并触发追平。', { timeOut: 2500 });
+                if (window.toastr) window.toastr.info('已在数据库工作台全选表格并点了追平，请在弹出的确认框里确认。', { timeOut: 3000 });
                 // 追平（runManualCatchUp）成功**不触发** _notifyTableUpdate / _notifyTableFillStart，
                 // 前端拿不到任何刷新信号 → 选项表/表格停在旧数据。这里启动追平完成检测轮询：
                 // 每 1.5s 轻量指纹比对 DB 数据，连续 3 次稳定判定追平结束，随后强制重拉+重渲染。
@@ -6035,9 +6079,16 @@ const checkRowChanged = (realIdx, row) => {
                 const CATCHUP_MAX_MS = 10 * 60 * 1000; // 10 分钟硬上限
                 const apiDB = core.getDB();
                 // stopCatchupPoll 为模块级定义（见 IIFE 顶层），此处直接引用
+                // 追平按钮从点下去起（生成计划、等用户在确认框里点确认、真正写入）一直是 disabled，
+                // 按钮还忙就不算「稳定」——否则用户读确认框超过 4.5 秒，这里就先报「追平完成」并停掉实时刷新。
+                const catchupBtn = okCatch;
+                const catchupBtnBusy = () => !!(catchupBtn && catchupBtn.isConnected && catchupBtn.disabled);
+                let catchupSawChange = false;
                 const finishCatchup = (saved) => {
                     if (!catchupTimer) return; // 已结束（幂等守卫）
                     stopCatchupPoll();
+                    // 从头到尾数据没变（用户在确认框点了取消 / 所选表已是最新）：数据库自己会提示，这里不再报「追平完成」
+                    if (saved && !catchupSawChange) return;
                     // 追平结束：清缓存 + 强制重拉 + 重渲染（含选项表），并把当前态存为新基线
                     cachedTableData = null;
                     lastRawTableRef = null;
@@ -6070,6 +6121,7 @@ const checkRowChanged = (realIdx, row) => {
                         const fp = lightFingerprint(apiDB.exportTableAsJson());
                         if (catchupLastFp !== null && fp !== catchupLastFp) {
                             catchupStable = 0; // 数据还在变：追平进行中
+                            catchupSawChange = true;
                             // 即时刷新：追平/填表后前端不即时刷新是用户反馈的痛点——DB 追平不调
                             // _notifyTableUpdate(契约),这里数据一变就 renderInterface(true) 让用户实时看到
                             // 追平写入的楼层;性能由 P1-1 按表克隆兜底(只克隆变化的 sheet,非全表)。
@@ -6082,6 +6134,8 @@ const checkRowChanged = (realIdx, row) => {
                             pendingDeleteRowIds.clear();
                             selectedRows.clear();
                             try { renderInterface(true); } catch (e) { console.error('[ACU] 追平即时刷新失败:', e); }
+                        } else if (catchupBtnBusy()) {
+                            catchupStable = 0; // 计划/确认框/写入还没结束
                         } else {
                             catchupStable++;
                             if (catchupStable >= CATCHUP_STABLE_N) { finishCatchup(true); return; }
@@ -6094,7 +6148,7 @@ const checkRowChanged = (realIdx, row) => {
                 if (catchupFallbackTimer) clearTimeout(catchupFallbackTimer);
                 catchupFallbackTimer = setTimeout(() => { finishCatchup(false); }, CATCHUP_MAX_MS + 2000);
             } else {
-                if (window.toastr) window.toastr.warning('未找到追平按钮，请在「填表工作台」页手动点击「一键追平所选表未填楼层」。', { timeOut: 3500 });
+                if (window.toastr) window.toastr.warning('未找到追平按钮，请在「填表工作台」页手动点击「一键追平」按钮。', { timeOut: 3500 });
             }
         });
 
@@ -6146,7 +6200,7 @@ const checkRowChanged = (realIdx, row) => {
         const currentStyle = savedStyles[tableName] || 'list';
 
         let gridHtml = ''; let fullHtml = '';
-        row.forEach((cell, cIdx) => {
+        padRowToHeaders(row, Array.isArray(headers) ? headers.length : 0).forEach((cell, cIdx) => {
              if (cIdx > 0) {
                 const headerName = headers[cIdx] || `属性${cIdx}`;
                 const cellStr = cellText(cell);
@@ -6191,16 +6245,25 @@ const checkRowChanged = (realIdx, row) => {
         });
     };
 
+    // 退出排序模式后的重绘：排序期间漏掉过数据通知就按通知补刷新（重拉、推进高亮），否则照旧用缓存重绘
+    const renderAfterOrderMode = () => {
+        const missed = updateMissedWhileOrdering;
+        updateMissedWhileOrdering = null;
+        if (missed) UpdateController.handleUpdate(null, missed.meta);
+        else renderInterface(false);
+    };
+
     const toggleOrderEditMode = () => {
         if (isEditingOrder) {
             const { $ } = getCore();
             const newOrder = [];
-            $('.acu-nav-tabs-area .acu-nav-btn').each(function() { const t = $(this).data('table'); if(t && t!==TAB_DASHBOARD) newOrder.push(t); });
+            $('.acu-nav-tabs-area .acu-nav-btn').each(function() { const t = $(this).attr('data-table'); if(t && t!==TAB_DASHBOARD) newOrder.push(t); });
             // 隐藏表不渲染按钮，直接存 newOrder 会把它们从 savedOrder 剔除；
             // 取消隐藏后会全部沉底。把仍存在但不在 DOM 序里的表按原相对顺序插回队尾。
             // 用当前数据集合做存在性过滤，已删表不回插（免死名永久滞留存储）。
             try {
-                const knownTables = new Set(Object.keys(getTableData() || {}));
+                // 存的顺序是表名，getTableData() 的键是 sheet_xxx，要按表名比
+                const knownTables = new Set(Object.keys(processJsonData(getTableData() || {})));
                 getSavedTableOrder().forEach(n => { if (!newOrder.includes(n) && knownTables.has(n)) newOrder.push(n); });
             } catch (_) {}
             saveTableOrder(newOrder);
@@ -6208,8 +6271,11 @@ const checkRowChanged = (realIdx, row) => {
             $('.acu-nav-actions-area .acu-action-btn').each(function() { if(this.id) newActionOrder.push(this.id); });
             saveActionOrder(newActionOrder);
             isEditingOrder = false;
+            renderAfterOrderMode();
+            return;
         } else {
             isEditingOrder = true;
+            updateMissedWhileOrdering = null;
         }
         renderInterface(false);
     };
@@ -6331,7 +6397,7 @@ const checkRowChanged = (realIdx, row) => {
         const rowIdx = parseInt($(cell).data('row'));
         const colIdx = parseInt($(cell).data('col'));
         const tableKey = $(cell).data('key');
-        const tableName = $(cell).data('tname');
+        const tableName = $(cell).attr('data-tname');
         const content = readCellValue(cell, rowIdx, colIdx, tableKey);
         const config = getConfig();
         const deleteKey = `${tableName}-row-${rowIdx}`;
@@ -6504,6 +6570,7 @@ const checkRowChanged = (realIdx, row) => {
         const openRowId = readRowId(tableKey, rowIndex);
         const openHeaders = Array.isArray(headers) ? headers.slice() : [];
 
+        displayRow = padRowToHeaders(displayRow, Array.isArray(headers) ? headers.length : 0);
         const inputsHtml = displayRow.map((cell, idx) => {
             if (idx === 0) return '';
             const headerName = headers[idx] || `Column ${idx}`;

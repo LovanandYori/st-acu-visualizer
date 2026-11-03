@@ -11,6 +11,7 @@
 //       这类错误 `node --check` 完全查不出来，只有真跑能发现。
 //   N-4 长文本阈值用**未 trim** 的 cellStr（与基线语义一致）
 //   N-5 auto_merged 占位格不渲染
+//   N-6 行数组比表头短（数据库加新列后老行没补齐）时，新列也要渲染出来（V17.8.5）
 //
 // 跑的是两处真实的 `row.forEach((cell, cIdx) => { ... })` 渲染回调。
 'use strict';
@@ -24,15 +25,26 @@ const src = readSource(process.argv[2]);
 // 真实 escapeHtml（20-25 行）与 cellText（72 行）——一起抽进来，避免复制实现。
 const escapeHtmlSrc = sliceDecl(src, 'const escapeHtml = (v) =>', 'escapeHtml');
 const cellTextSrc = sliceDecl(src, 'const cellText = (cell) =>', 'cellText');
+// padRowToHeaders 是多语句箭头函数，sliceDecl 会停在函数体里第一个分号，按花括号配对抽整段
+const padRowSrc = (() => {
+  const needle = 'const padRowToHeaders = (row, headerLen) => {';
+  const start = src.indexOf(needle);
+  if (start < 0) throw new Error('锚点没找到：padRowToHeaders');
+  let end = findBlockEnd(src, start + needle.length - 1);
+  while (end < src.length && src[end] !== ';') end++;
+  return src.slice(start, end + 1);
+})();
 
 // 两处渲染语句：抽**整条** `row.forEach((cell, cIdx) => { ... });`，
 // 连参数一起（只抽函数体的话 cIdx/cell 会变成悬空标识符）。
-const RENDER_ANCHOR = 'row.forEach((cell, cIdx) => {';
+// V17.8.5 起两处都先按表头补齐：`padRowToHeaders(row, ...).forEach((cell, cIdx) => {`，两种写法都认。
+const RENDER_ANCHOR_RE = /(?:padRowToHeaders\(row, [^;\n]*?\)|\brow)\.forEach\(\(cell, cIdx\) => \{/g;
 function extractRenderers() {
   const out = [];
-  let i = -1;
-  while ((i = src.indexOf(RENDER_ANCHOR, i + 1)) >= 0) {
-    const bodyStart = src.indexOf('{', i + RENDER_ANCHOR.length - 2);
+  let m;
+  while ((m = RENDER_ANCHOR_RE.exec(src))) {
+    const i = m.index;
+    const bodyStart = i + m[0].length - 1;
     const bodyEnd = findBlockEnd(src, bodyStart);
     // findBlockEnd 停在 forEach 体的 '}'，再吃掉 ');' 收尾
     let end = bodyEnd;
@@ -51,7 +63,7 @@ const renderers = extractRenderers();
 // 共享的硬契约只有：null 归一、合法 falsy 值、cellStr 作用域、>50 阈值、
 // auto_merged 跳过、XSS 转义。
 const PROFILES = [
-  { key: 'table-card', extra: ['const isListMode = __isListMode;', 'const tableData = __tableData;', 'const realIndex = __realIndex;', 'const currentDiffMap = new Set(__diffKeys || []);'], hasHighlight: true, skipsTitle: true, headersOffset: -1, styleVar: 'isListMode' },
+  { key: 'table-card', extra: ['const isListMode = __isListMode;', 'const tableData = { ...__tableData, headers: ["row_id", ...__headers] };', 'const realIndex = __realIndex;', 'const currentDiffMap = new Set(__diffKeys || []);'], hasHighlight: true, skipsTitle: true, headersOffset: -1, styleVar: 'isListMode' },
   { key: 'quick-view', extra: ['const currentStyle = __currentStyle;'], hasHighlight: false, skipsTitle: false, headersOffset: 0, styleVar: 'currentStyle' },
 ];
 
@@ -73,6 +85,7 @@ function runRenderer(idx, stmt, o) {
   const scope = buildScope([
     escapeHtmlSrc,
     cellTextSrc,
+    padRowSrc,
     'let gridHtml = ""; let fullHtml = "";',
     'const headers = __headers;',
     'const titleColIndex = __titleColIndex;',
@@ -164,13 +177,24 @@ const H = ['row_id', '名称', '备注'];
       ok(!htmlOf(out).includes('auto_merged'), 'auto_merged 格被跳过');
     }
 
+    section(`[N-6] ${tag}：行数组比表头短时新列照样渲染`);
+    {
+      // 表卡片的 headers 是去掉 row_id 后的（headers[cIdx-1]），快速查看的是完整表头（headers[cIdx]）
+      const hs = P.skipsTitle ? ['名称', '备注', '新列'] : ['row_id', '名称', '新列'];
+      const out = safeRun(r, stmt, { ...base, row: ['r1', '甲'], headers: hs });
+      ok(htmlOf(out).includes('新列'), '缺格的新列也有一格（可见、可点）', htmlOf(out).slice(0, 160));
+      ok(!/undefined|null/.test(htmlOf(out)), '补出来的格是空的，不显示 undefined');
+    }
+
     section(`[N-7] ${tag}：表头下标与标题格跳过（PROFILES.headersOffset 必须是有效契约）`);
     {
       // 之前 headersOffset / styleVar 是**死字段**：写在 profile 里却没有任何断言读它，
       // 于是「表头取 headers[cIdx-1] 还是 headers[cIdx]」这条契约零覆盖，
       // 改错了也没人发现。这里把它变成真断言。
       const probe = P.skipsTitle ? baseNoTitle : base;   // 表卡片需 titleColIndex=0 才会渲染第 1 格
-      const out = safeRun(r, stmt, { ...probe, row: ['r1', '甲值', '乙值'], headers: ['H0', 'H1', 'H2'] });
+      // 表卡片的 headers 已去掉 row_id（2 个数据列 → 2 个表头）；快速查看是完整表头（3 个）。
+      // 表头比行多的话会补出一格新列（N-6），那样 H2 出现是对的，就测不出下标错位了。
+      const out = safeRun(r, stmt, { ...probe, row: ['r1', '甲值', '乙值'], headers: P.skipsTitle ? ['H0', 'H1'] : ['H0', 'H1', 'H2'] });
       const wantLabel = 'H' + (1 + P.headersOffset);
       const wrongLabel = 'H' + (1 + (P.headersOffset === 0 ? -1 : 1));
       ok(htmlOf(out).includes(wantLabel),

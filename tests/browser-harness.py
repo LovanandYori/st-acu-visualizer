@@ -519,4 +519,142 @@ with sync_playwright() as p:
     check('T0 no page errors (home page float run)', not errs, '; '.join(errs)[:200])
     b.close()
 
+    # T21 (V17.8.5): ⚡ 手动更新走数据库 V2 工作台。数据库 1.3 把追平按钮改名为「一键追平还没填的内容」，
+    # 旧代码只认「一键追平所选表未填楼层」，点⚡后找不到按钮。另外追平按钮点下去后要等用户在确认框里点确认，
+    # 按钮这段时间一直 disabled；旧代码只看数据有没有变，确认框开着超过 4.5 秒就先报「追平完成」并停掉实时刷新。
+    FAKE_V2 = r"""() => {
+      window.__catch = { clicks: 0, t0: 0 };
+      window.__succ = []; window.toastr.success = m => window.__succ.push([Date.now() - window.__catch.t0, m]);
+      window.toastr.info = () => {}; window.toastr.warning = () => {};
+      window.AutoCardUpdaterV2API = { open: async () => {
+        let app = document.getElementById('acu-app-v2');
+        if (app) return;
+        app = document.createElement('div'); app.id = 'acu-app-v2';
+        app.innerHTML = '<button data-page-id="form-fill">填表工作台</button><div class="page"></div>';
+        document.body.appendChild(app);
+        app.querySelector('[data-page-id]').onclick = () => setTimeout(() => {
+          const pgEl = app.querySelector('.page');
+          pgEl.innerHTML = '<button class="sel">全选</button><button class="run">执行手动填表</button><button class="cu">一键追平还没填的内容</button>';
+          const cu = pgEl.querySelector('.cu');
+          cu.onclick = () => {
+            window.__catch.clicks++; window.__catch.t0 = Date.now();
+            cu.disabled = true; cu.textContent = '正在补齐…';
+            const done = () => { cu.disabled = false; cu.textContent = '一键追平还没填的内容'; };
+            if (window.__catchMode === 'cancel') { setTimeout(done, 2000); return; }
+            // 用户读确认框 6 秒后点确认，随后分两批写入（工作台追平中途不通知前端）
+            setTimeout(() => { window.__data.sheet_b.content.push(['4', '火把', '1']); }, 6000);
+            setTimeout(() => { window.__data.sheet_b.content.push(['5', '绳子', '1']); done(); }, 7500);
+          };
+        }, 50);
+      } };
+    }"""
+    for mode in ('confirm', 'cancel'):
+        b, pg, errs = boot(p, {'showDashboard': False}, pre=FAKE_V2)
+        pg.evaluate(f"() => {{ window.__catchMode = '{mode}'; }}")
+        open_tab(pg, '背包')
+        pg.evaluate("() => document.querySelector('#acu-btn-manual-update').click()")
+        pg.wait_for_timeout(1500)
+        clicked = pg.evaluate("() => window.__catch.clicks")
+        if mode == 'confirm':
+            pg.wait_for_timeout(4700)   # 第 6.2 秒：确认框还开着，数据还没写
+            early = pg.evaluate("() => window.__succ.slice()")
+            pg.wait_for_timeout(1300)   # 第一批已写入：应已实时刷新
+            if not pg.evaluate("() => !!document.querySelector('#acu-data-area.visible')"): open_tab(pg, '背包')
+            mid = pg.evaluate("() => document.querySelector('#acu-data-area').textContent.includes('火把')")
+            pg.wait_for_timeout(7000)
+            late = pg.evaluate("() => window.__succ.slice()")
+            if not pg.evaluate("() => !!document.querySelector('#acu-data-area.visible')"): open_tab(pg, '背包')
+            final = pg.evaluate("() => document.querySelector('#acu-data-area').textContent.includes('绳子')")
+            check('T21 ⚡ finds the renamed catch-up button (DB 1.3+)', clicked == 1, f'clicks={clicked}')
+            check('T21 no "catch-up done" while the confirm dialog is still open; live refresh shows the first batch',
+                  early == [] and mid, f'early={early} mid={mid}')
+            check('T21 catch-up done reported once after writing finishes, data refreshed',
+                  len(late) == 1 and late[0][0] > 7500 and final, f'late={late} final={final}')
+        else:
+            pg.wait_for_timeout(7500)
+            succ = pg.evaluate("() => window.__succ.slice()")
+            check('T21 cancelled in the confirm dialog: no "catch-up done" toast', clicked == 1 and succ == [], f'clicks={clicked} succ={succ}')
+        check(f'T0 no page errors (catch-up {mode} run)', not errs, '; '.join(errs)[:200])
+        b.close()
+
+    # T22 (V17.8.5): 一批交互缺陷（代码审查发现，每条在旧代码上都会挂）
+    act = "() => document.querySelector('.acu-nav-btn.active')?.getAttribute('data-table') || null"
+    enter_sort = "() => { document.querySelector('#acu-btn-settings').click(); document.querySelector('#btn-enter-sort').click(); }"
+    # (a) 排序模式里到达的填表通知不能丢：退出后要显示新数据
+    b, pg, errs = boot(p, {'showDashboard': False})
+    open_tab(pg, '背包')
+    pg.evaluate(enter_sort); pg.wait_for_timeout(300)
+    pg.evaluate("() => { window.__data.sheet_b.content.push(['4', '火把', '1']); window.__notify(); }"); pg.wait_for_timeout(200)
+    pg.evaluate("() => document.querySelector('#acu-btn-cancel-mode').click()"); pg.wait_for_timeout(300)
+    open_tab(pg, '背包')
+    check('T22 a fill that lands during sort mode shows up after leaving it',
+          pg.evaluate("() => document.querySelector('#acu-data-area').textContent.includes('火把')"))
+    # (b) 保存排序不能把隐藏的表从顺序里删掉
+    pg.evaluate("() => { localStorage.setItem('acu_table_order', JSON.stringify(['背包', '主角信息'])); localStorage.setItem('acu_hidden_tables', JSON.stringify(['主角信息'])); window.dispatchEvent(new StorageEvent('storage', { key: 'acu_hidden_tables' })); window.__notify(); }")
+    pg.wait_for_timeout(300)
+    pg.evaluate(enter_sort); pg.wait_for_timeout(300)
+    pg.evaluate("() => document.querySelector('#acu-btn-save-mode').click()"); pg.wait_for_timeout(300)
+    order = pg.evaluate("() => JSON.parse(localStorage.getItem('acu_table_order'))")
+    check('T22 saving the tab order keeps hidden tables in it', order == ['背包', '主角信息'], json.dumps(order, ensure_ascii=False))
+    check('T0 no page errors (sort-mode run)', not errs, '; '.join(errs)[:200])
+    b.close()
+    # (c) 搜索后：多选能点、页码栏跟着搜索结果走
+    b, pg, errs = boot(p, {'showDashboard': False, 'itemsPerPage': 2})
+    open_tab(pg, '背包')
+    pages0 = pg.evaluate("() => document.querySelectorAll('#acu-data-area .acu-page-btn[data-page]').length")
+    pg.evaluate("() => { const i = document.querySelector('#acu-search-input'); i.style.display = ''; i.value = '盾牌'; i.dispatchEvent(new Event('input', { bubbles: true })); }")
+    pg.wait_for_timeout(400)
+    pages1 = pg.evaluate("() => document.querySelectorAll('#acu-data-area .acu-page-btn').length")
+    pg.evaluate("() => { const i = document.querySelector('#acu-search-input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); }")
+    pg.wait_for_timeout(400)
+    pages2 = pg.evaluate("() => document.querySelectorAll('#acu-data-area .acu-page-btn').length")
+    check('T22 search rebuilds the page footer (gone for 1 hit, back after clearing)', pages0 > 0 and pages1 == 0 and pages2 == pages0, f'{pages0}->{pages1}->{pages2}')
+    pg.evaluate("() => document.querySelector('#acu-btn-multiselect').click()"); pg.wait_for_timeout(200)
+    pg.evaluate("() => { const i = document.querySelector('#acu-search-input'); i.style.display = ''; i.value = '长剑'; i.dispatchEvent(new Event('input', { bubbles: true })); }")
+    pg.wait_for_timeout(400)
+    pg.evaluate("() => document.querySelector('#acu-data-area .acu-data-card .acu-card-body').click()"); pg.wait_for_timeout(200)
+    sel = pg.evaluate("() => ({ badge: !!document.querySelector('#acu-data-area .acu-badge-pending'), checked: !!document.querySelector('#acu-data-area .acu-card-checkbox:checked') })")
+    check('T22 multi-select works on search results', sel == {'badge': True, 'checked': True}, json.dumps(sel))
+    check('T0 no page errors (search run)', not errs, '; '.join(errs)[:200])
+    b.close()
+    # (d) 隐藏正开着的表：面板收起，不留一个没有导航按钮、点什么都没反应的面板
+    b, pg, errs = boot(p, {'showDashboard': False})
+    open_tab(pg, '背包')
+    pg.evaluate("() => { localStorage.setItem('acu_hidden_tables', JSON.stringify(['背包'])); window.dispatchEvent(new StorageEvent('storage', { key: 'acu_hidden_tables' })); window.__notify(); }")
+    pg.wait_for_timeout(300)
+    st = pg.evaluate("() => ({ open: !!document.querySelector('#acu-data-area.visible'), active: document.querySelector('.acu-nav-btn.active')?.getAttribute('data-table') || null })")
+    check('T22 hiding the open table closes its panel', st == {'open': False, 'active': None}, json.dumps(st, ensure_ascii=False))
+    b.close()
+    # (e) 没有通知的数据变化（工作台追平等）在切表时被发现：新行要高亮
+    b, pg, errs = boot(p, {'showDashboard': False, 'highlightNew': True})
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(200)
+    open_tab(pg, '主角信息')
+    pg.evaluate("() => { const c = window.__data.sheet_b.content; window.__data.sheet_b = { ...window.__data.sheet_b, content: [...c, ['4', '火把', '1']] }; }")
+    open_tab(pg, '背包')
+    hl = pg.evaluate("() => [...document.querySelectorAll('#acu-data-area .acu-data-card')].filter(c => c.querySelector('.acu-highlight-changed')).map(c => c.querySelector('.acu-editable-title').textContent)")
+    check('T22 silent change found on tab switch: the new row is highlighted', hl == ['火把'], json.dumps(hl, ensure_ascii=False))
+    check('T0 no page errors (silent-change run)', not errs, '; '.join(errs)[:200])
+    b.close()
+    # (f) 数字表名（如「2024」）：标签能正常高亮/收起；(g) 加了新列、老行没补齐：卡片上也有新列
+    NUM_NAME = "window.__data.sheet_a.name = '2024'; window.__data.sheet_b.content[0].push('耐久');"
+    b, pg, errs = boot(p, {'showDashboard': False}, post_mock=NUM_NAME)
+    open_tab(pg, '2024')
+    a1 = pg.evaluate(act)
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+    a2 = pg.evaluate(act)
+    check('T22 numeric table name stays the active tab across a refresh', a1 == '2024' and a2 == '2024', f'{a1} -> {a2}')
+    open_tab(pg, '背包')
+    col = pg.evaluate("() => document.querySelector('#acu-data-area').textContent.includes('耐久')")
+    check('T22 a column added after the rows were written is shown on the cards', col)
+    check('T0 no page errors (name/column run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
+    # (h) 仪表盘卡槽绑定了「任务表」，排在前面的「主线任务表」不能抢走（以前只做包含匹配）
+    QUESTS = "window.__data.sheet_q1 = { name: '主线任务表', orderNo: 2, content: [['row_id','名称'], ['1','屠龙']] }; window.__data.sheet_q2 = { name: '任务表', orderNo: 3, content: [['row_id','名称'], ['1','采药']] };"
+    b, pg, errs = boot(p, {'showDashboard': True, 'dashboardPosition': 'embedded'}, post_mock=QUESTS,
+                       before_mock="() => localStorage.setItem('acu_dash_config_v1', JSON.stringify({ slot_6_1: { isEmpty: false, title: '任务', text: '任务表', rule: 'capsule', capCol: 1 } }))")
+    txt = dash_text(pg)
+    check('T22 dashboard slot bound to 任务表 shows 任务表, not 主线任务表', '采药' in txt and '屠龙' not in txt, txt[:160])
+    b.close()
+
 print(f'\n{sum(results)}/{len(results)} passed')
