@@ -41,7 +41,7 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 - **本仓库维护**：SillyTavern（ST 酒馆）+ 数据库 [`AlbusKen/shujuku`](https://github.com/AlbusKen/shujuku)
 - **原样保留（未实测）**：TauriTavern（TT 酒馆）`2.3.0` + 数据库 [`shuiyue-cmyk/shujuku-rebuild`](https://github.com/shuiyue-cmyk/shujuku-rebuild)，即原仓库 V17.7.5 时的主基线
 
-**当前版本 V17.8.5 适配 ST 库 `1.3.5`（`85ebff0`）；TT 部分沿用 V17.7.5 时的 TT 酒馆 `2.3.0`（`a1855be4`）+ TT 库 `9.10.3`（`93eca17`）。**
+**当前版本 V17.8.6 适配 ST 库 `1.3.7`（`c45d50e`）；TT 部分沿用 V17.7.5 时的 TT 酒馆 `2.3.0`（`a1855be4`）+ TT 库 `9.10.3`（`93eca17`）。**
 
 > ST 库自 `1.0.0` 起**重置了版本号**（此前为 9.x）并更名，故同一仓出现了两条并行的版本序列。
 > 表格里 ST 列写的都是该库**自己 manifest 里的 version**，未做任何换算。
@@ -50,6 +50,7 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 
 | 前端版本 | ST 数据库 | TT 数据库（shujuku-rebuild） |
 |---|---|---|
+| V17.8.6（本 fork） | 1.3.7（`c45d50e`） | 9.10.3（未实测） |
 | V17.8.5（本 fork） | 1.3.5（`85ebff0`） | 9.10.3（未实测） |
 | V17.8.4（本 fork） | 1.3.1（`e284f00`） | 9.10.3（未实测） |
 | V17.8.2 ~ V17.8.3（本 fork） | 1.3（`9ea631f`） | 9.10.3（未实测） |
@@ -87,7 +88,7 @@ SillyTavern 的「SP·数据库」可视化前端扩展。在聊天区渲染数�
 ```bash
 node tests/run-all.js                        # 395 项断言
 python tests/sabotage-matrix.py              # 注入矩阵：验证测试本身有效
-node tests/run-all.js --db <ST库>              # 附带数据库契约（ST 库 1.2.9 时共 428 项，数据库更新后必跑）
+node tests/run-all.js --db <ST库>              # 附带数据库契约（ST 库 1.3.7 时共 466 项，数据库更新后必跑）
 ```
 
 另有一份浏览器场景测试（需要 Python + Playwright + Chromium，不是零依赖）：用假的酒馆页面和按数据库 1.2.9 行为写的假数据库，回放自动填表高亮、换聊天、多选删除、空表诊断等 14 个场景：

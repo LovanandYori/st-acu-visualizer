@@ -187,6 +187,7 @@ function makeImpl(allowed) {
         'let isMultiSelectMode = true;',
         'let selectedRows = new Map();',
         'let bulkOpActive = false;',
+        'let chatEpoch = 0;',
         'let cachedTableData = null, lastRawTableRef = null, lastTableSetFingerprint = "";',
         'const notifyEditBlocked = () => { __calls.notified++; };',
         'const isTableEditAllowed = () => __allowed;',
@@ -233,6 +234,76 @@ function makeImpl(allowed) {
           '删除进行中 bulkOpActive === true（通知被有意挂起）', JSON.stringify(duringDelete));
         ok(mod.observe().bulkOpActive === false, '循环结束后 bulkOpActive 已复位（finally 生效）');
       }
+    }
+
+    // 循环要跑好几秒（数据库每删一行等近 1 秒），期间外部会动到状态。三种中途变化，都不能删错行：
+    //   ① 填表轮询/通知把 pendingDeleteRowIds 清空（清空后「没有 row_id 可比」曾被当成放行）
+    //   ② 数据库里的行被别的写入挪动（复验必须读每次删除前的现状，不是循环开始时的快照）
+    //   ③ 切了聊天（剩下的行号属于上一个聊天）
+    section('[E-3d] 批量删进行中状态被外部改动：不按旧行号删错行（V17.8.6）');
+    const runMidLoop = async (onFirstDelete) => {
+      const invoked = [];
+      const live = { X: { content: [['row_id', 'a'], ['r1', 'x'], ['r2', 'y'], ['r3', 'z']] } };
+      let hook = null;
+      const api = { deleteRow: async (t, r) => { invoked.push([t, r]); if (invoked.length === 1 && hook) hook(); return true; } };
+      const scope = buildScope([
+        'let pendingDeletes = new Set();',
+        'let pendingDeleteRowIds = new Map();',
+        'let isMultiSelectMode = true;',
+        'let selectedRows = new Map();',
+        'let bulkOpActive = false;',
+        'let chatEpoch = 0;',
+        'let cachedTableData = null, lastRawTableRef = null, lastTableSetFingerprint = "";',
+        'const notifyEditBlocked = () => {};',
+        'const isTableEditAllowed = () => true;',
+        'const getCore = () => ({ getDB: () => __api });',
+        'const readLiveTableData = () => __live;',
+        'const getTableData = () => ({});',
+        'const processJsonData = (d) => ({ X: { rows: d.X.content.slice(1) } });',
+        'const renderInterface = () => {};',
+        'const updateDynamicActionButton = () => {};',
+        'const saveSnapshot = () => {};',
+        'const cloneTableData = (d) => d;',
+        'let currentDiffMap = new Set();',
+        'const window = { toastr: { error() {}, success() {}, warning(m) { __warn.push(m); }, info() {} } };',
+        'const __run = async () => {',
+        'pendingDeletes = new Set(["X-row-0", "X-row-2"]);',
+        'pendingDeleteRowIds = new Map([["X-row-0", "r1"], ["X-row-2", "r3"]]);',
+        body,
+        '};',
+        'const __clearIds = () => { pendingDeleteRowIds.clear(); };',
+        'const __switchChat = () => { chatEpoch++; };',
+      ], '({ run: __run, clearIds: __clearIds, switchChat: __switchChat })');
+      const warn = [];
+      const mod = vm.runInNewContext(scope, {
+        __api: api, __live: live, __warn: warn,
+        console: { ...console, error() {}, warn() {}, log() {} },
+        Object, Array, JSON, String, Math, Number, parseInt, isNaN, Promise, Set, Map, RegExp,
+      });
+      hook = () => onFirstDelete(mod, live);
+      await mod.run();
+      return { invoked, warn };
+    };
+    {
+      // 对照：中途什么都没变 → 两行都删（倒序：先第 3 行再第 1 行）
+      const r = await runMidLoop(() => {});
+      eq(r.invoked, [['X', 3], ['X', 1]], '对照：中途无变化时两行都按倒序删除');
+    }
+    {
+      // ①+②：第一行删完后，记录被清空，且数据库里第 1 行已换成别的行
+      const r = await runMidLoop((mod, live) => {
+        mod.clearIds();
+        live.X.content.splice(3, 1);                 // 模拟第 3 行已删
+        live.X.content.splice(1, 0, ['r9', 'new']);  // 别的写入在最前面插了一行，原第 1 行被挤到第 2 行
+      });
+      eq(r.invoked, [['X', 3]], '记录被清空 + 行被挪动：第二行拒删（没有按旧行号删掉新插入的行）');
+      ok(r.warn.some(m => /失败/.test(m)), '给出「部分完成」提示', JSON.stringify(r.warn));
+    }
+    {
+      // ③：第一行删完后切了聊天
+      const r = await runMidLoop((mod) => { mod.switchChat(); });
+      eq(r.invoked, [['X', 3]], '中途切聊天：剩下的行不再删');
+      ok(r.warn.some(m => /切换了聊天/.test(m)), '提示剩下的行没有删除', JSON.stringify(r.warn));
     }
   }
 

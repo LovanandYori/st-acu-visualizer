@@ -657,4 +657,91 @@ with sync_playwright() as p:
     check('T22 dashboard slot bound to 任务表 shows 任务表, not 主线任务表', '采药' in txt and '屠龙' not in txt, txt[:160])
     b.close()
 
+    # T23 (V17.8.6): 第二轮代码审查发现的缺陷（每条在旧代码上都会挂）
+    # (a) 批量删除进行中再点一次「保存删除」：数据库每删一行要等近 1 秒，按钮期间没有变化。
+    #     旧代码会再起一轮，两轮各按自己记下的行号删，结果删掉了没勾选的「盾牌」。
+    SLOW_DELETE = r"""
+    window.__data.sheet_b.content = [['row_id','物品','数量'], ['1','药水','2'], ['2','长剑','3'], ['3','盾牌','5'], ['4','弓','1'], ['5','箭','9'], ['6','靴子','1']];
+    window.AutoCardUpdaterAPI.deleteRow = async (t, r) => {
+      window.__calls.push(['deleteRow', t, r, sheetByName(t).content[r][1]]);
+      sheetByName(t).content.splice(r, 1);
+      window.__notify();
+      await new Promise(res => setTimeout(res, 800));
+      return true;
+    };
+    """
+    b, pg, errs = boot(p, {'showDashboard': False}, post_mock=SLOW_DELETE)
+    open_tab(pg, '背包')
+    pg.evaluate("() => document.querySelector('#acu-btn-multiselect').click()"); pg.wait_for_timeout(200)
+    pg.evaluate("""() => { for (const c of document.querySelectorAll('.acu-data-card')) {
+        const t = c.querySelector('.acu-editable-title').textContent; if (t === '长剑' || t === '弓') c.querySelector('.acu-card-checkbox').click(); } }""")
+    pg.wait_for_timeout(200)
+    pg.evaluate("() => document.querySelector('#acu-btn-refresh').click()"); pg.wait_for_timeout(300)
+    pg.evaluate("() => { const b = document.querySelector('#acu-btn-refresh'); if (b) b.click(); }")
+    pg.wait_for_timeout(3500)
+    deleted = pg.evaluate("() => window.__calls.filter(c => c[0] === 'deleteRow').map(c => c[3])")
+    left = pg.evaluate("() => window.__data.sheet_b.content.slice(1).map(r => r[1])")
+    check('T23 clicking save-deletes again mid-batch does not delete an unselected row',
+          sorted(deleted) == sorted(['弓', '长剑']) and left == ['药水', '盾牌', '箭', '靴子'],
+          json.dumps({'deleted': deleted, 'left': left}, ensure_ascii=False))
+    shown = pg.evaluate("() => [...document.querySelectorAll('#acu-data-area .acu-editable-title')].map(e => e.textContent)")
+    check('T23 after the batch the panel shows the remaining rows', shown == ['药水', '盾牌', '箭', '靴子'], json.dumps(shown, ensure_ascii=False))
+    check('T0 no page errors (batch-delete run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
+    # (b) 输入框里按回车不一定是发送：手机上酒馆默认回车换行，输入法选字的回车也不发送。
+    #     旧代码只要按回车就把行动选项藏起来，要等下一次生成结束才回来。
+    #     假页面按酒馆的写法补一个挂在 document 上的回车处理：__sendOnEnter 为真才 preventDefault（= 真的发送）。
+    OPT_ENTER = r"""
+    window.__data.sheet_OptionsNew = { name: '选项', orderNo: 9, content: [['row_id','选项一','选项二'], ['1','去东边','去西边']] };
+    window.__stChat = [{ is_user: true, mes: 'hi', send_date: 1 }, { is_user: false, mes: 'hello', send_date: 2 }];
+    window.__sendOnEnter = false;
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && window.__sendOnEnter) e.preventDefault(); });
+    """
+    b, pg, errs = boot(p, {'showDashboard': False, 'showOptionPanel': True}, post_mock=OPT_ENTER)
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+    opts = lambda: pg.evaluate("() => document.querySelectorAll('.acu-embedded-options-container .acu-opt-btn').length")
+    n0 = opts()
+    pg.focus('#send_textarea'); pg.keyboard.type('abc'); pg.keyboard.press('Enter'); pg.wait_for_timeout(300)
+    n1 = opts()
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+    n2 = opts()
+    check('T23 Enter that only inserts a newline keeps the action options', n0 == 2 and n1 == 2 and n2 == 2, f'{n0}->{n1}->{n2}')
+    pg.evaluate("() => { window.__sendOnEnter = true; }")
+    pg.focus('#send_textarea'); pg.keyboard.press('Enter'); pg.wait_for_timeout(300)
+    n3 = opts()
+    check('T23 Enter that sends still hides the action options right away', n3 == 0, f'options={n3}')
+    check('T0 no page errors (enter-key run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
+    # (c) 浏览器存储满时「被替换的正文」框点开后收不起来（旧代码每次都从存储读回旧状态）
+    REP_FULL = "window.__stChat = [{ is_user: true, mes: 'hi' }, { is_user: false, mes: 'hello', extra: { _acu_original_content: '原文原文' } }];"
+    b, pg, errs = boot(p, {'showDashboard': False}, post_mock=REP_FULL)
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+    pg.evaluate("() => { Storage.prototype.setItem = function() { throw new DOMException('full', 'QuotaExceededError'); }; }")
+    mh = lambda: pg.evaluate("() => { const w = document.querySelector('.acu-rep-content-wrapper'); return w ? w.style.maxHeight : null; }")
+    s0 = mh()
+    pg.evaluate("() => document.querySelector('.acu-rep-ctrl-bar').click()"); pg.wait_for_timeout(100); s1 = mh()
+    pg.evaluate("() => document.querySelector('.acu-rep-ctrl-bar').click()"); pg.wait_for_timeout(100); s2 = mh()
+    check('T23 replaced-text box still collapses when storage is full', s0 == '0px' and s1 == '260px' and s2 == '0px', f'{s0}->{s1}->{s2}')
+    check('T0 no page errors (rep-box run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
+    # (d) 换主题后点弹窗外面关闭设置：嵌入的行动选项框、被替换正文框要跟着换（旧代码只有点「关闭」按钮才重绘）
+    THEME_MIX = OPT_ENTER + "window.__stChat[1].extra = { _acu_original_content: '原文原文' };"
+    b, pg, errs = boot(p, {'showDashboard': True, 'showOptionPanel': True, 'theme': 'aurora'}, post_mock=THEME_MIX)
+    pg.evaluate("() => window.__notify()"); pg.wait_for_timeout(300)
+    pg.evaluate("() => document.querySelector('#acu-btn-settings').click()"); pg.wait_for_timeout(300)
+    pg.evaluate("() => { const s = document.querySelector('#cfg-theme'); s.value = 'traceline'; s.dispatchEvent(new Event('change', { bubbles: true })); }"); pg.wait_for_timeout(200)
+    pos = pg.evaluate("() => { const r = document.querySelector('.acu-edit-overlay').getBoundingClientRect(); return [r.left + 3, r.top + 3]; }")
+    pg.mouse.click(pos[0], pos[1]); pg.wait_for_timeout(400)
+    th = pg.evaluate("""() => { const t = (sel) => ((document.querySelector(sel)?.className || '').match(/acu-theme-[a-zA-Z0-9_-]+/g) || []).join(',');
+        return { closed: !document.querySelector('.acu-edit-overlay'), wrapper: t('.acu-wrapper'), opts: t('.acu-embedded-options-container'),
+                 dash: t('.acu-embedded-dashboard-container'), rep: t('.acu-embedded-replaced-container') }; }""")
+    want = 'acu-theme-traceline'
+    check('T23 closing settings by clicking outside applies the new theme to every embedded block',
+          th == {'closed': True, 'wrapper': want, 'opts': want, 'dash': want, 'rep': want}, json.dumps(th, ensure_ascii=False))
+    check('T0 no page errors (theme run)', not errs, '; '.join(errs)[:200])
+    b.close()
+
 print(f'\n{sum(results)}/{len(results)} passed')

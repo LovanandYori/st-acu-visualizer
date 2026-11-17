@@ -166,6 +166,11 @@ INJECTIONS = [
     ('没有聊天 ID 不再视为首页', "return id === undefined || id === null || id === '';", 'return false;', 1),
     # ── 第九批：老行没补齐新列（本 fork V17.8.5，代码审查发现）──
     ('行数组不按表头补齐（新列看不到）', '        if (!(headerLen > row.length)) return row;', '        return row;', 1),
+    # ── 第十批：批量删除跑到一半状态被外部改动（本 fork V17.8.6，代码审查发现）──
+    ('批量删复验不冻结 row_id（记录被清空后当成放行）',
+     'const expectedRowIds = new Map(pendingDeleteRowIds);', 'const expectedRowIds = pendingDeleteRowIds;', 1),
+    ('批量删中途切聊天仍继续删',
+     'if (chatEpoch !== epochAtStart) { abortedRows++; continue; }', '', 1),
 ]
 
 

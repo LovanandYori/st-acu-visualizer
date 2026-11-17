@@ -2,7 +2,7 @@
     'use strict';
     
     const SCRIPT_ID = 'acu_visualizer_ui_v20_pagination';
-    const EXT_VERSION = '17.8.5'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
+    const EXT_VERSION = '17.8.6'; // 与 manifest.json version 同步；版本规则：patch 满10进 minor、双满10进 major
     const STORAGE_KEY_TABLE_ORDER = 'acu_table_order';
     const STORAGE_KEY_ACTION_ORDER = 'acu_action_order';
     const STORAGE_KEY_ACTIVE_TAB = 'acu_active_tab';
@@ -132,6 +132,8 @@
     let saveQueue = Promise.resolve();
     // 批量 deleteRow 循环进行中：挂起 handleUpdate（见刷新按钮流程注释）
     let bulkOpActive = false;
+    // 每次切聊天加一：跑了好几秒的批量删除靠它发现「聊天已经换了」，剩下的行不再删
+    let chatEpoch = 0;
     // meta.persisted=false 提示的节流时间戳
     let lastUnpersistedToastTs = 0;
     // MESSAGE_UPDATED → 被替换正文框轻量重检的防抖句柄
@@ -153,6 +155,8 @@
     let lastObservedChatEl = null;
     // 行动选项折叠状态的本页内存副本：浏览器存储满时 setItem 会抛错，靠它让折叠/展开仍然按点击切换
     let optCollapseMem = null;
+    // 「被替换的正文」框同理
+    let repCollapseMem = null;
     let isCollapsed = (() => { try { return localStorage.getItem(STORAGE_KEY_UI_COLLAPSE) === 'true'; } catch (e) { return false; } })();
     let globalScrollTop = 0;
     let currentPage = 1;
@@ -3276,10 +3280,12 @@ ${allTableNames.map(tName => {
         });
         dialog.find('#btn-enter-sort').click(() => { dialog.remove(); toggleOrderEditMode(); });
         dialog.find('#dlg-close').click(() => { dialog.remove(); renderInterface(false); });
-        bindBackdropClose(dialog, () => dialog.remove());
+        // 点弹窗外面关闭和点「关闭」按钮一样要重绘一次：换主题等设置只即时改了主面板，
+        // 嵌入的行动选项框、被替换正文框要靠重绘才换成新主题（以前点外面关掉会留下两种主题混在一起）。
+        bindBackdropClose(dialog, () => { dialog.remove(); renderInterface(false); });
     };
 
-        
+
     const injectEmbeddedDashboard = (htmlContent, themeClass, cssVars) => {
         const { $ } = getCore();
         if (!htmlContent) {
@@ -3662,10 +3668,13 @@ ${allTableNames.map(tName => {
 
         const STORAGE_KEY_REP_COLLAPSE = 'acu_rep_collapse_state';
         let isCollapsed = true; // 原文默认收起，不挤占屏幕
-        try {
-            const s = localStorage.getItem(STORAGE_KEY_REP_COLLAPSE);
-            if (s !== null) isCollapsed = s === 'true';
-        } catch (e) {}
+        if (repCollapseMem !== null) isCollapsed = repCollapseMem;
+        else {
+            try {
+                const s = localStorage.getItem(STORAGE_KEY_REP_COLLAPSE);
+                if (s !== null) isCollapsed = s === 'true';
+            } catch (e) {}
+        }
 
         const timeStr = info.at ? formatOptTime(info.at) : '';
         const $container = $(`<div class="acu-embedded-replaced-container"></div>`);
@@ -3718,22 +3727,20 @@ ${allTableNames.map(tName => {
         $header.on('click', function (e) {
             if ($(e.target).closest('.acu-rep-copy').length) return;
             e.stopPropagation();
-            let nowCollapsed = true;
-            try {
-                const cur = localStorage.getItem(STORAGE_KEY_REP_COLLAPSE);
-                nowCollapsed = cur === null ? true : cur === 'true';
-            } catch (_) {}
+            // 当前是展开还是收起，看这个框自己的箭头，不读存储：存储满了写不进时读回来的永远是旧值，
+            // 点开就再也收不起来；「所有楼层都显示」时几个框共用一个存储值，点别的框也会对不上。
+            const nowCollapsed = $header.find('.acu-rep-chevron').hasClass('fa-chevron-down');
             if (nowCollapsed) {
                 $wrapperEl.css({ 'max-height': '260px', 'opacity': '1', 'padding': '10px 12px' });
                 $header.css({ 'border-radius': '12px 12px 0 0', 'margin-bottom': '-1px' });
                 $header.find('.acu-rep-chevron').removeClass('fa-chevron-down').addClass('fa-chevron-up');
-                try { localStorage.setItem(STORAGE_KEY_REP_COLLAPSE, 'false'); } catch (_) {}
             } else {
                 $wrapperEl.css({ 'max-height': '0', 'opacity': '0', 'padding': '0' });
                 $header.css({ 'border-radius': '12px', 'margin-bottom': '0' });
                 $header.find('.acu-rep-chevron').removeClass('fa-chevron-up').addClass('fa-chevron-down');
-                try { localStorage.setItem(STORAGE_KEY_REP_COLLAPSE, 'true'); } catch (_) {}
             }
+            repCollapseMem = !nowCollapsed;
+            try { localStorage.setItem(STORAGE_KEY_REP_COLLAPSE, String(repCollapseMem)); } catch (_) { /* 存储满：本页内存里仍记着 */ }
         });
         $container.find('.acu-rep-copy').on('click', function (e) {
             e.stopPropagation();
@@ -5771,6 +5778,13 @@ const checkRowChanged = (realIdx, row) => {
 
             $('#acu-btn-refresh, #acu-btn-refresh-emb').off('click').on('click', async (e) => {
                 e.stopPropagation();
+                // 上一批删除还没跑完时再点一次，不能再起一轮：数据库每删一行要等近 1 秒，按钮期间没有变化，
+                // 用户很容易再点。两轮各按自己记下的行号删，后一轮会删到没勾选的行（V17.8.6 复现并修复）。
+                // 刷新也一并挡住：循环中途重拉会拿到删到一半的数据。
+                if (bulkOpActive) {
+                    if (window.toastr) window.toastr.info('正在删除，请稍候…', { timeOut: 1500 });
+                    return;
+                }
                 if (pendingDeletes.size > 0) {
                     // 批量删直连 DB API，需在此单独过闸门。
                     if (!isTableEditAllowed()) {
@@ -5797,21 +5811,27 @@ const checkRowChanged = (realIdx, row) => {
                     }
                     let failedRows = 0;
                     let failedTableNames = [];
-                    // 复验用的表快照：pendingDeletes 记的是「勾选时刻的行下标」，
+                    // 删除前按 row_id 复验：pendingDeletes 记的是「勾选时刻的行下标」，
                     // 若期间 DB 发生无通知写入（工作台「一键追平」等）导致行插入/删除，
-                    // 同一行下标已指向别的行。deleteRow 不可逆，故删除前按 row_id 复验：
-                    // 不一致就跳过该行并计入失败，走既有提示通道，绝不按陈旧下标删错行。
-                    // 注意 getTableData() 以 sheetId 为键，而 group 以表名为键，
-                    // 必须经 processJsonData 还原「表名 → sheetKey」映射后才能取到 content。
-                    let verifyTables = null;
-                    // 复验快照同样取自 DB 活引用（理由见 readLiveTableData）：缓存克隆可能
-                    // 因「同 key 整表原地替换」而陈旧，拿它比对 row_id 等于没比。取不到才退回缓存。
-                    try { verifyTables = processJsonData(readLiveTableData() || getTableData(true) || {}); } catch (_) { verifyTables = null; }
+                    // 同一行下标已指向别的行。deleteRow 不可逆，不一致就跳过该行并计入失败，
+                    // 走既有提示通道，绝不按陈旧下标删错行。
+                    // 勾选时记下的 row_id 先冻结一份：循环要跑好几秒，期间填表轮询、切聊天都会清空
+                    // pendingDeleteRowIds，清空后「没有 row_id 可比」会被当成放行，等于没复验。
+                    const expectedRowIds = new Map(pendingDeleteRowIds);
+                    const epochAtStart = chatEpoch;
+                    let abortedRows = 0;
                     const isRowStillSame = (t, r) => {
                         // 无 row_id 可比（老库/脏数据）时保持既有行为，不额外拦截。
-                        const expected = pendingDeleteRowIds.get(`${t}-row-${r}`);
+                        const expected = expectedRowIds.get(`${t}-row-${r}`);
                         if (expected === undefined || expected === null || expected === '') return true;
                         try {
+                            // 每删一行之前都重新读数据库现状，不用循环开始时拍的快照：循环期间数据库里的行
+                            // 还可能被别的写入挪动（同表内自己是倒序删，不影响还没删的更小行号）。
+                            // 取自 DB 活引用（理由见 readLiveTableData）：缓存克隆可能因「同 key 整表原地替换」
+                            // 而陈旧，拿它比对 row_id 等于没比。取不到才退回缓存。
+                            // 注意 getTableData() 以 sheetId 为键，而 group 以表名为键，
+                            // 必须经 processJsonData 还原「表名 → sheetKey」映射后才能取到 content。
+                            const verifyTables = processJsonData(readLiveTableData() || getTableData(true) || {});
                             const entry = verifyTables && verifyTables[t];
                             const content = entry && Array.isArray(entry.rows) ? entry.rows : null;
                             const row = Array.isArray(content) ? content[r] : null;
@@ -5825,11 +5845,15 @@ const checkRowChanged = (realIdx, row) => {
                     // 通知到达时 deleteRow 的 await 未落定，getTableData(true) 会拉到中间态，
                     // 该中间态一旦被写路径回灌就是 data_replace 冲突源（DB 作者指出的高危模式）。
                     // 循环结束统一全量重拉刷新，挂起期间到达的通知视作已覆盖。
+                    const totalRows = Object.keys(group).reduce((n, t) => n + group[t].length, 0);
+                    if (totalRows > 1 && window.toastr) window.toastr.info(`正在删除 ${totalRows} 行，请稍候…`, { timeOut: 2500 });
                     bulkOpActive = true;
                     try {
                         for (const t in group) {
                             const rows = group[t].sort((a,b) => b - a);
                             for (const r of rows) {
+                                // 删到一半切了聊天：剩下的行号属于上一个聊天，一行都不能再删
+                                if (chatEpoch !== epochAtStart) { abortedRows++; continue; }
                                 if (!isRowStillSame(t, r)) {
                                     // 行已易位：拒绝按陈旧下标删除，计入失败让用户知情。
                                     failedRows++; if (!failedTableNames.includes(t)) failedTableNames.push(t);
@@ -5850,7 +5874,8 @@ const checkRowChanged = (realIdx, row) => {
                     isMultiSelectMode = false;
                     selectedRows.clear();
                     if (window.toastr) {
-                        if (failedRows === 0) window.toastr.success('删除成功');
+                        if (abortedRows > 0) window.toastr.warning(`删除中途切换了聊天，剩下的 ${abortedRows} 行没有删除。`);
+                        else if (failedRows === 0) window.toastr.success('删除成功');
                         else window.toastr.warning(`删除部分完成：${failedRows} 行失败（${failedTableNames.join('、') || '未知表'}），请检查数据库状态。`);
                     }
                     cachedTableData = null;
@@ -6156,9 +6181,14 @@ const checkRowChanged = (realIdx, row) => {
              suppressOptionsForSend();
         });
         $('#send_textarea').off('keydown.acu_opt_hide').on('keydown.acu_opt_hide', function(e) {
-             if (e.key === 'Enter' && !e.shiftKey) {
-                 suppressOptionsForSend();
-             }
+             if (e.key !== 'Enter' || e.shiftKey) return;
+             // 回车不一定是发送：手机上酒馆默认「回车换行」，输入法选字时的回车也不发送。
+             // 以前只要按回车就先把选项藏起来，这两种情况下消息没发出去，选项却要等到下一次生成结束才回来。
+             // 酒馆自己的判断挂在 document 上（比这里晚执行），它真要发送时会 preventDefault
+             // （RossAscends-mods.js 的 processHotkeys）；所以等这次按键分发完，看默认行为有没有被取消。
+             const ev = e.originalEvent || e;
+             if (ev.isComposing || e.keyCode === 229) return;
+             setTimeout(() => { if (ev.defaultPrevented) suppressOptionsForSend(); }, 0);
         });
         
         $('.acu-opt-btn').off('click').on('click', function(e) {
@@ -7044,6 +7074,9 @@ const checkRowChanged = (realIdx, row) => {
         };
 
         const loop = () => {
+             // 已经初始化过就不再跑：TT 下「宿主就绪」和 1 秒重试两条路都会调到这里，
+             // 跑两遍会把数据库通知和宿主事件各订阅两次
+             if (isInitialized) return;
              const { $ } = getCore();
              if (getCore().getDB()?.exportTableAsJson && $) {
                   renderInterface(true);
@@ -7088,6 +7121,7 @@ const checkRowChanged = (realIdx, row) => {
                          const { evSrc, evTypes } = getHostEventBus();
                          if (evSrc && typeof evSrc.on === 'function' && evTypes && evTypes.CHAT_CHANGED) {
                              evSrc.on(evTypes.CHAT_CHANGED, () => {
+                                 chatEpoch++;
                                  stopFillPoll();
                                  stopCatchupPoll(); // 切聊天停掉旧追平轮询，防跨聊天误刷新/误 toast
                                  cachedTableData = null;
